@@ -1,0 +1,35 @@
+name: Bug report
+description: Something is wrong or misattributed
+labels: [bug]
+body:
+  - type: input
+    id: version
+    attributes:
+      label: DeskTime version
+      placeholder: "0.1.0-beta.1 (Settings > About)"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2, build 26100 (Settings > System > About)"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics
+      description: If tracking looks wrong, paste or screenshot Settings > Diagnostics > Show live view while it is happening.
+  - type: textarea
+    id: log
+    attributes:
+      label: Log
+      description: Attach the newest file from Settings > About > Open logs. Logs contain app health only, never your activity.

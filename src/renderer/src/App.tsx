@@ -1,0 +1,139 @@
+import { useEffect, useState } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { AppWindow, BarChart3, Clock, Hourglass, LayoutDashboard, Settings as SettingsIcon, Target } from 'lucide-react'
+import type { Appearance, Page as PageId, Settings as SettingsT, TrackerStatus } from '../../shared/types'
+import { applyAppearance } from '@/lib/theme'
+import { Onboarding } from '@/components/Onboarding'
+import { useEvent } from '@/lib/hooks'
+import { fmtDuration } from '@/lib/format'
+import { STATIC } from '@/lib/motion'
+import { Dot } from '@/components/ui'
+import { Overview } from '@/pages/Overview'
+import { Timeline } from '@/pages/Timeline'
+import { Applications } from '@/pages/Applications'
+import { Focus } from '@/pages/Focus'
+import { Limits } from '@/pages/Limits'
+import { Reports } from '@/pages/Reports'
+import { Settings } from '@/pages/Settings'
+
+const NAV: { id: PageId; label: string; icon: typeof LayoutDashboard }[] = [
+  { id: 'overview', label: 'Overview', icon: LayoutDashboard },
+  { id: 'timeline', label: 'Timeline', icon: Clock },
+  { id: 'apps', label: 'Applications', icon: AppWindow },
+  { id: 'focus', label: 'Focus', icon: Target },
+  { id: 'limits', label: 'Limits', icon: Hourglass },
+  { id: 'reports', label: 'Reports', icon: BarChart3 },
+  { id: 'settings', label: 'Settings', icon: SettingsIcon }
+]
+
+export default function App(): JSX.Element {
+  const [page, setPage] = useState<PageId>(() => (new URLSearchParams(window.location.search).get('page') as PageId | null) ?? 'overview')
+  const [status, setStatus] = useState<TrackerStatus | null>(null)
+  const [settings, setSettings] = useState<SettingsT | null>(null)
+
+  useEffect(() => {
+    void window.api.trackerStatus().then(setStatus)
+    void window.api.getSettings().then(setSettings)
+  }, [])
+  useEvent<TrackerStatus>('tracker:status', setStatus)
+  useEvent<PageId>('navigate', (p) => setPage(p))
+  useEvent<{ dark: boolean; appearance?: Appearance }>('theme:changed', ({ dark, appearance }) => {
+    if (appearance) applyAppearance(appearance, dark)
+    else {
+      document.documentElement.classList.toggle('dark', dark)
+      document.documentElement.classList.toggle('light', !dark)
+    }
+  })
+
+  const state = !status
+    ? { color: 'var(--muted)', text: 'Connecting', live: false }
+    : status.paused
+      ? { color: 'var(--muted)', text: status.pausedUntil ? 'Paused (break)' : 'Paused', live: false }
+      : status.locked
+        ? { color: 'var(--muted)', text: 'Locked', live: false }
+        : status.screenOff
+          ? { color: 'var(--muted)', text: 'Screen off', live: false }
+          : status.media
+            ? { color: 'var(--success)', text: 'Media', live: true }
+            : status.call
+              ? { color: 'var(--success)', text: 'In a call', live: true }
+              : status.passive
+                ? { color: 'var(--accent-2)', text: 'Passive', live: false }
+                : status.idle
+                  ? { color: 'var(--warning)', text: 'Idle', live: false }
+                  : { color: 'var(--success)', text: 'Tracking', live: true }
+
+  return (
+    <div className="h-full flex flex-col relative">
+      {settings && (!settings.onboardingDone || new URLSearchParams(window.location.search).has('onboarding')) && (
+        <Onboarding settings={settings} onDone={setSettings} />
+      )}
+      {/* title bar: draggable, leaves room for the native window controls on the right */}
+      <header className="topbar drag-region h-11 shrink-0 flex items-center justify-between pl-5 pr-[150px] border-b border-border">
+        <div className="flex items-center gap-2.5">
+          <span className="w-4 h-4 rounded-full grid place-items-center" style={{ background: 'var(--accent)' }}>
+            <span className="w-1.5 h-1.5 rounded-full bg-white" />
+          </span>
+          <span className="text-[12px] font-semibold tracking-[0.14em] text-secondary">DESKTIME</span>
+        </div>
+        <div className="no-drag flex items-center gap-2 text-[12.5px] text-secondary">
+          <Dot color={state.color} size={7} live={state.live} />
+          <span>{state.text}</span>
+          {status && status.tracking && <span className="text-muted num">· {fmtDuration(status.todayScreenMs)} today</span>}
+        </div>
+      </header>
+
+      <div className="flex-1 flex min-h-0">
+        <nav className="sidebar w-[204px] shrink-0 border-r border-border py-4 px-3 flex flex-col gap-0.5">
+          {NAV.map((n) => {
+            const on = page === n.id
+            const Icon = n.icon
+            return (
+              <button
+                key={n.id}
+                onClick={() => setPage(n.id)}
+                className={`relative flex items-center gap-2.5 px-3 py-2 rounded-xl text-[13.5px] text-left transition-colors ${
+                  on ? 'text-primary' : 'text-secondary hover:text-primary hover:bg-[var(--control)]'
+                }`}
+              >
+                {on &&
+                  (STATIC ? (
+                    <span className="absolute inset-0 rounded-xl nav-active" style={activeStyle} />
+                  ) : (
+                    <motion.span
+                      layoutId="nav-active"
+                      className="absolute inset-0 rounded-xl"
+                      style={activeStyle}
+                      transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                    />
+                  ))}
+                <Icon size={16} strokeWidth={1.75} className={`relative ${on ? 'text-accent' : ''}`} />
+                <span className="relative">{n.label}</span>
+              </button>
+            )
+          })}
+          <div className="mt-auto px-3 text-[11px] text-muted leading-relaxed">Local only. Nothing leaves this PC.</div>
+        </nav>
+
+        <main className="flex-1 min-w-0 overflow-y-auto pt-4">
+          <AnimatePresence mode="wait" initial={false}>
+            {page === 'overview' && (
+              <Overview key="overview" status={status} onOpenApps={() => setPage('apps')} onOpenTimeline={() => setPage('timeline')} />
+            )}
+            {page === 'timeline' && <Timeline key="timeline" />}
+            {page === 'apps' && <Applications key="apps" />}
+            {page === 'focus' && <Focus key="focus" />}
+            {page === 'limits' && <Limits key="limits" />}
+            {page === 'reports' && <Reports key="reports" />}
+            {page === 'settings' && <Settings key="settings" status={status} />}
+          </AnimatePresence>
+        </main>
+      </div>
+    </div>
+  )
+}
+
+const activeStyle = {
+  background: 'rgba(var(--accent-rgb), 0.12)',
+  boxShadow: '0 0 0 1px rgba(var(--accent-rgb), 0.18)'
+}

@@ -1,0 +1,99 @@
+{
+  "name": "desktime",
+  "productName": "DeskTime",
+  "version": "0.1.0-beta.1",
+  "description": "DeskTime - Digital Wellbeing / Screen Time for Windows. Local-only usage tracking.",
+  "main": "./out/main/index.js",
+  "author": "DeskTime contributors",
+  "license": "MIT",
+  "private": true,
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
+    "postinstall": "electron-rebuild -f -w better-sqlite3 && node scripts/make-icons.mjs",
+    "icons": "node scripts/make-icons.mjs",
+    "dist": "electron-vite build && electron-builder --win",
+    "dist:signed": "electron-vite build && cross-env-shell \"CSC_LINK=certs/desktime-dev.pfx CSC_KEY_PASSWORD=desktime-dev electron-builder --win\""
+  },
+  "dependencies": {
+    "@fontsource-variable/manrope": "^5.3.0",
+    "better-sqlite3": "^12.11.1",
+    "koffi": "^2.16.3"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^3.7.2",
+    "@tailwindcss/vite": "^4.1.18",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.14.0",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "cross-env": "^10.1.0",
+    "electron": "^37.10.3",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^3.1.0",
+    "framer-motion": "^12.43.0",
+    "lucide-react": "^0.577.0",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0",
+    "recharts": "^2.15.4",
+    "tailwindcss": "^4.1.18",
+    "typescript": "~5.8.3",
+    "vite": "^6.4.3"
+  },
+  "build": {
+    "appId": "com.desktime.app",
+    "productName": "DeskTime",
+    "directories": {
+      "output": "release",
+      "buildResources": "resources"
+    },
+    "files": [
+      "out/**",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/koffi/**",
+      "node_modules/better-sqlite3/**"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "resources/icon.ico",
+      "artifactName": "${productName}-Setup-${version}.${ext}",
+      "verifyUpdateCodeSignature": false,
+      "signtoolOptions": {
+        "signingHashAlgorithms": [
+          "sha256"
+        ],
+        "rfc3161TimeStampServer": "http://timestamp.digicert.com",
+        "publisherName": "DeskTime"
+      }
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "perMachine": false,
+      "runAfterFinish": true,
+      "createDesktopShortcut": true
+    },
+    "extraResources": [
+      {
+        "from": "resources",
+        "to": "resources",
+        "filter": [
+          "*.png",
+          "*.ico"
+        ]
+      }
+    ]
+  }
+}
