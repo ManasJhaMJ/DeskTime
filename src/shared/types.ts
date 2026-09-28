@@ -15,8 +15,6 @@ export interface Settings {
   windowMaterial: 'none' | 'mica' | 'acrylic'
   /** Keep counting as active while a fullscreen app or a video keeps the display awake, even with no input. */
   mediaCountsActive: boolean
-  /** Opt-in: record window titles (browser tabs, documents, projects) alongside the app. */
-  trackWindowTitles: boolean
   dailyDigestEnabled: boolean
   /** "HH:MM" local time */
   dailyDigestTime: string
@@ -31,7 +29,34 @@ export interface Settings {
   /** Follow Windows, or force a mode. */
   theme: 'system' | 'light' | 'dark'
   appearance: Appearance
+  /**
+   * Months of second-by-second session detail to keep. Older days are folded into per-app daily totals
+   * (reports and averages keep working; timelines for those days are gone). 0 keeps everything forever.
+   */
+  retentionMonths: number
+  /** Ask GitHub Releases for a newer version at startup and every few hours. The only network call the app makes. */
+  autoUpdateCheck: boolean
+  /**
+   * Hour (0-6) at which a new day begins. Use before this hour counts toward the previous day, so a night owl's
+   * 1 AM session lands on the evening it belongs to. Changing it re-files recorded sessions.
+   */
+  dayStartHour: number
+  /** Companion on the Overview: a bot character, the user's own picture, or none. */
+  avatar: AvatarChoice
+  /** Data URL of the user's picture (downscaled), used when avatar is "photo". */
+  avatarPhoto: string | null
+  /** When the companion dozes off: by the clock (23:00 to 06:00), while nothing is tracked, or never. */
+  avatarSleeps: AvatarSleeps
+  /** Evening reminder when a streak is not yet met or about to break. */
+  streakRemindersEnabled: boolean
+  /** "HH:MM" local time */
+  streakReminderTime: string
 }
+
+export const AVATAR_BOTS = ['ghost', 'cat', 'blob', 'clover', 'droid', 'alien', 'cloud'] as const
+export type AvatarBot = (typeof AVATAR_BOTS)[number]
+export type AvatarChoice = AvatarBot | 'photo' | 'none'
+export type AvatarSleeps = 'time' | 'idle' | 'never'
 
 export interface Appearance {
   darkBase: 'forest' | 'navy' | 'graphite' | 'neutral'
@@ -40,7 +65,8 @@ export interface Appearance {
   accent: string
   radius: 'sharp' | 'rounded' | 'soft'
   motion: 'full' | 'reduced' | 'off'
-  font: 'manrope' | 'system'
+  /** Bundled variable fonts (offline) or the Windows system font. */
+  font: 'system' | 'comic' | 'saira' | 'roboto' | 'caveat'
 }
 
 export const DEFAULT_APPEARANCE: Appearance = {
@@ -49,7 +75,7 @@ export const DEFAULT_APPEARANCE: Appearance = {
   accent: 'coral',
   radius: 'rounded',
   motion: 'full',
-  font: 'manrope'
+  font: 'system'
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -65,7 +91,6 @@ export const DEFAULT_SETTINGS: Settings = {
   firstRunDone: false,
   windowMaterial: 'none',
   mediaCountsActive: true,
-  trackWindowTitles: false,
   dailyDigestEnabled: true,
   dailyDigestTime: '21:00',
   weeklyDigestEnabled: true,
@@ -74,7 +99,71 @@ export const DEFAULT_SETTINGS: Settings = {
   callsCountActive: true,
   onboardingDone: false,
   theme: 'system',
-  appearance: DEFAULT_APPEARANCE
+  appearance: DEFAULT_APPEARANCE,
+  retentionMonths: 12,
+  autoUpdateCheck: true,
+  dayStartHour: 0,
+  avatar: 'ghost',
+  avatarPhoto: null,
+  avatarSleeps: 'time',
+  streakRemindersEnabled: true,
+  streakReminderTime: '20:00'
+}
+
+export const DAY_START_OPTIONS: { value: number; label: string }[] = [0, 1, 2, 3, 4, 5, 6].map((h) => ({
+  value: h,
+  label: h === 0 ? '12 AM' : `${h} AM`
+}))
+
+export const FONT_OPTIONS: { value: Appearance['font']; label: string }[] = [
+  { value: 'system', label: 'System' },
+  { value: 'comic', label: 'Comic Neue' },
+  { value: 'saira', label: 'Saira' },
+  { value: 'roboto', label: 'Roboto' },
+  { value: 'caveat', label: 'Caveat' }
+]
+
+export const RETENTION_OPTIONS: { value: number; label: string }[] = [
+  { value: 3, label: '3 months' },
+  { value: 6, label: '6 months' },
+  { value: 12, label: '1 year' },
+  { value: 24, label: '2 years' },
+  { value: 0, label: 'Forever' }
+]
+
+export interface DataInfo {
+  /** Raw session rows still stored. */
+  sessions: number
+  apps: number
+  /** Oldest day with any data, raw or rolled up. */
+  firstDay: string | null
+  /** Days that only exist as daily totals. */
+  compactedDays: number
+  /** Oldest day that still has full session detail. */
+  detailSince: string | null
+  /** Database file size in bytes (main file plus WAL). */
+  bytes: number
+  path: string
+}
+
+export interface CompactResult {
+  days: number
+  sessions: number
+}
+
+export type UpdateState = 'disabled' | 'idle' | 'checking' | 'not-available' | 'available' | 'downloading' | 'downloaded' | 'error'
+
+export interface UpdateStatus {
+  state: UpdateState
+  /** Version offered by the feed when state is available, downloading or downloaded. */
+  version: string | null
+  /** Download progress 0..100 while downloading. */
+  percent: number
+  /** Last check time, epoch ms. */
+  checkedAt: number | null
+  error: string | null
+  /** Why checks are off: not packaged, or turned off in Settings. */
+  reason: string | null
 }
 
 export interface AppInfo {
@@ -106,12 +195,6 @@ export interface CategoryUsage extends Category {
   apps: number
 }
 
-/** A window-title stretch inside an app (only recorded when trackWindowTitles is on). */
-export interface ContextUsage {
-  title: string
-  ms: number
-  count: number
-}
 
 export interface AppUsage extends AppInfo {
   /** Hands-on plus passive time. */
@@ -162,6 +245,52 @@ export interface DailyPoint {
   activeMs: number
   idleMs: number
   screenMs: number
+}
+
+// ---- streaks ----------------------------------------------------------
+
+export type StreakKind = 'screenUnder' | 'activeAtLeast' | 'categoryAtLeast' | 'categoryUnder' | 'appUnder' | 'focusAtLeast'
+
+export const STREAK_KINDS: { value: StreakKind; label: string; needs: 'none' | 'category' | 'app'; hint: string }[] = [
+  { value: 'screenUnder', label: 'Keep screen time under a limit', needs: 'none', hint: 'Total screen time for the day stays at or below the target.' },
+  { value: 'activeAtLeast', label: 'Be active for at least', needs: 'none', hint: 'Hands-on plus passive time reaches the target.' },
+  { value: 'categoryAtLeast', label: 'Spend at least … in a category', needs: 'category', hint: 'Pick the category to spend time in.' },
+  { value: 'categoryUnder', label: 'Keep a category under a limit', needs: 'category', hint: 'Pick the category to keep in check.' },
+  { value: 'appUnder', label: 'Keep an application under a limit', needs: 'app', hint: 'Pick the application to keep in check.' },
+  { value: 'focusAtLeast', label: 'Focus for at least … a day', needs: 'none', hint: 'Time spent in focus sessions reaches the target.' }
+]
+
+export interface Streak {
+  id: number
+  kind: StreakKind
+  /** Minutes per day. */
+  target: number
+  /** Category or application id for kinds that need one. */
+  refId: number | null
+  refName: string | null
+  createdDay: string
+}
+
+export interface StreakDay {
+  day: string
+  /** Minutes measured that day. */
+  value: number
+  /** true hit, false missed, null still open (today). */
+  ok: boolean | null
+  /** A miss covered by a freeze day. */
+  frozen?: boolean
+}
+
+export const FREEZES_PER_MONTH = 3
+
+export interface StreakStatus extends Streak {
+  current: number
+  best: number
+  todayState: 'done' | 'pending' | 'failed'
+  /** Oldest to newest, up to about a year. */
+  days: StreakDay[]
+  /** Freeze days still available this calendar month. */
+  freezesLeft: number
 }
 
 export interface AppDetail {
@@ -276,7 +405,6 @@ export interface Diagnostics {
     packageFamily: string | null
     isRealWindow: boolean
     fullscreen: boolean
-    title: string | null
   } | null
   currentApp: string | null
   displayRequired: boolean
@@ -286,7 +414,7 @@ export interface Diagnostics {
   versions: { app: string; electron: string; node: string }
 }
 
-export type Page = 'overview' | 'timeline' | 'apps' | 'focus' | 'limits' | 'reports' | 'settings'
+export type Page = 'overview' | 'timeline' | 'apps' | 'focus' | 'limits' | 'streaks' | 'reports' | 'settings'
 
-export const EVENT_CHANNELS = ['tracker:status', 'focus:update', 'navigate', 'apps:changed', 'data:changed', 'theme:changed'] as const
+export const EVENT_CHANNELS = ['tracker:status', 'focus:update', 'navigate', 'apps:changed', 'data:changed', 'theme:changed', 'update:status'] as const
 export type EventChannel = (typeof EVENT_CHANNELS)[number]

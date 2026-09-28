@@ -4,6 +4,8 @@ import type { AppInfo, AppLimit, LimitMode } from '../../../shared/types'
 import { usePoll } from '@/lib/hooks'
 import { fmtDuration, today } from '@/lib/format'
 import { AppIcon, Card, Empty, Meter, Page, PageHeader, Segmented } from '@/components/ui'
+import { DURATION_HINT } from '@/lib/duration'
+import { DurationField } from '@/components/DurationField'
 
 const MODES: { value: LimitMode; label: string; hint: string }[] = [
   { value: 'warn', label: 'Warning only', hint: 'One notification when the limit is reached.' },
@@ -59,20 +61,7 @@ export function Limits(): JSX.Element {
                         {over && ' · limit reached'}
                       </div>
                     </div>
-                    <select
-                      value={l.dailyMinutes}
-                      onChange={(e) => update(l, { dailyMinutes: Number(e.target.value) })}
-                      className="text-[12.5px] !py-1.5"
-                    >
-                      {[15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 480].map((m) => (
-                        <option key={m} value={m}>
-                          {fmtDuration(m * 60_000)}
-                        </option>
-                      ))}
-                      {![15, 30, 45, 60, 90, 120, 180, 240, 300, 360, 480].includes(l.dailyMinutes) && (
-                        <option value={l.dailyMinutes}>{fmtDuration(l.dailyMinutes * 60_000)}</option>
-                      )}
-                    </select>
+                    <DurationField minutes={l.dailyMinutes} onCommit={(m) => update(l, { dailyMinutes: m })} className="w-[96px] text-[12.5px] !py-1.5 num" label="Daily limit" />
                     <select value={l.mode} onChange={(e) => update(l, { mode: e.target.value as LimitMode })} className="text-[12.5px] !py-1.5">
                       {MODES.map((m) => (
                         <option key={m.value} value={m.value}>
@@ -106,8 +95,9 @@ export function Limits(): JSX.Element {
             </select>
           </label>
           <label className="flex flex-col gap-1.5">
-            <span className="text-[12.5px] text-secondary">Minutes per day</span>
-            <input type="number" min={1} max={1440} value={minutes} onChange={(e) => setMinutes(Number(e.target.value))} />
+            <span className="text-[12.5px] text-secondary">Time per day</span>
+            <DurationField minutes={minutes} onCommit={setMinutes} live label="Daily limit" />
+            <span className="text-[11.5px] text-muted">{DURATION_HINT}</span>
           </label>
         </div>
         <div className="flex flex-col gap-1.5 mb-4">

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { X } from 'lucide-react'
-import type { DaySummary, TimelineSegment } from '../../../shared/types'
+import type { DaySummary, TimelineSegment, Transition } from '../../../shared/types'
 import { usePoll } from '@/lib/hooks'
 import { fmtDuration, fmtTime, today } from '@/lib/format'
 import { assignSlots, colorForApp, NEUTRAL } from '@/lib/palette'
@@ -13,6 +13,7 @@ export function Timeline(): JSX.Element {
   const [selected, setSelected] = useState<TimelineSegment | null>(null)
   const segments = usePoll<TimelineSegment[]>(() => window.api.timeline(day), [day], day === today() ? 10_000 : 120_000)
   const summary = usePoll<DaySummary>(() => window.api.daySummary(day), [day], day === today() ? 10_000 : 120_000)
+  const transitions = usePoll<Transition[]>(() => window.api.transitions(day, 1), [day], day === today() ? 30_000 : 120_000)
 
   useEffect(() => setSelected(null), [day])
   useEffect(() => {
@@ -32,21 +33,41 @@ export function Timeline(): JSX.Element {
 
   return (
     <Page>
-      <PageHeader title="Timeline" subtitle="How the day unfolded, hour by hour." right={<DayNav day={day} onChange={setDay} />} />
+      <PageHeader title="Timeline" subtitle="How the day unfolded, hour by hour. Scroll over the lanes to zoom, shift+scroll to pan." right={<DayNav day={day} onChange={setDay} />} />
 
-      <div className="grid grid-cols-4 gap-3 mb-3">
+      <div className="grid grid-cols-3 gap-3 mb-3">
         <StatTile label="Screen time" value={s ? fmtDuration(s.screenMs) : '—'} />
         <StatTile label="Active" value={s ? fmtDuration(s.activeMs) : '—'} />
         <StatTile label="Idle" value={s ? fmtDuration(s.idleMs) : '—'} />
+      </div>
+      <div className="grid grid-cols-3 gap-3 mb-3">
+        <StatTile
+          label="Sessions"
+          value={s ? String(s.sessions) : '—'}
+          sub={
+            s && s.longestSessionStart !== null
+              ? `Longest ${fmtDuration(s.longestSessionMs)} · ${fmtTime(s.longestSessionStart)}`
+              : 'Continuous stretches of activity'
+          }
+        />
+        <StatTile
+          label="App switches"
+          value={s ? String(s.switches) : '—'}
+          sub={
+            transitions.data?.[0]
+              ? `Most common ${transitions.data[0].fromApp} to ${transitions.data[0].toApp}`
+              : 'Between applications'
+          }
+        />
         <StatTile
           label="Active window"
           value={s?.firstActivity ? fmtTime(s.firstActivity) : '—'}
-          sub={s?.lastActivity ? `to ${fmtTime(s.lastActivity)}` : undefined}
+          sub={s?.lastActivity ? `First activity · last ${fmtTime(s.lastActivity)}` : 'First activity of the day'}
         />
       </div>
 
       <Card className="mb-3">
-        <DayTimeline segments={segments.data ?? []} day={day} selected={selected} onSelect={setSelected} />
+        <DayTimeline segments={segments.data ?? []} day={day} selected={selected} onSelect={setSelected} zoomable />
       </Card>
 
       {selected && (

@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, Eye, EyeOff, GitMerge, Pencil, Plus, Trash2, Undo2 } from 'lucide-react'
-import type { AppDetail, AppInfo, AppUsage, Category, ContextUsage, Settings as SettingsT } from '../../../shared/types'
+import { ChevronDown, ChevronRight, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
+import type { AppDetail, AppInfo, AppUsage, Category } from '../../../shared/types'
 import { usePoll } from '@/lib/hooks'
 import { deltaText, fmtDuration, MINOR_APP_MS, today } from '@/lib/format'
 import { assignSlots, colorForApp } from '@/lib/palette'
@@ -17,15 +17,6 @@ export function Applications(): JSX.Element {
   const apps = usePoll<AppUsage[]>(() => window.api.dayApps(day), [day], live ? 5000 : 120_000, ['data:changed', 'apps:changed'])
   const all = usePoll<AppInfo[]>(() => window.api.listApps(), [], 60_000, ['apps:changed'])
   const cats = usePoll<Category[]>(() => window.api.listCategories(), [], 60_000, ['apps:changed'])
-  const [settings, setSettings] = useState<SettingsT | null>(null)
-  useEffect(() => {
-    void window.api.getSettings().then(setSettings)
-  }, [])
-  const contexts = usePoll<ContextUsage[]>(
-    () => (selectedId === null || !settings?.trackWindowTitles ? Promise.resolve([]) : window.api.appContexts(selectedId, day, 10)),
-    [selectedId, day, settings?.trackWindowTitles],
-    live ? 10_000 : 120_000
-  )
   const detail = usePoll<AppDetail | null>(
     () => (selectedId === null ? Promise.resolve(null) : window.api.appDetail(selectedId, day)),
     [selectedId, day],
@@ -50,12 +41,6 @@ export function Applications(): JSX.Element {
   const delta = d ? deltaText(d.todayMs, d.yesterdayMs) : null
   const allApps = all.data ?? []
   const hiddenApps = allApps.filter((a) => a.hidden)
-  const mergedInto = useMemo(() => {
-    const m = new Map<number, AppInfo[]>()
-    for (const a of allApps) if (a.mergedInto !== null) m.set(a.mergedInto, [...(m.get(a.mergedInto) ?? []), a])
-    return m
-  }, [allApps])
-
   return (
     <Page>
       <PageHeader
@@ -69,7 +54,7 @@ export function Applications(): JSX.Element {
             {usage.length === 0 ? (
               <Empty title="No applications recorded" hint="Switch to a day with activity, or keep using your PC." />
             ) : (
-              <ul className="py-1">
+              <ul className="py-1 min-w-0 overflow-hidden">
                 {(showMinor ? [...list, ...minor] : list).map((a) => {
                   const on = a.id === selectedId
                   const share = total ? ((a.activeMs + a.idleMs) / total) * 100 : 0
@@ -144,7 +129,6 @@ export function Applications(): JSX.Element {
                     <div className="text-[17px] font-semibold truncate">{d.app.displayName}</div>
                     <div className="text-[12px] text-muted truncate" title={d.app.exePath}>
                       {d.app.exeName}
-                      {(mergedInto.get(d.app.id) ?? []).map((m) => ` · ${m.exeName}`).join('')}
                     </div>
                   </div>
                 </div>
@@ -171,29 +155,9 @@ export function Applications(): JSX.Element {
               <Card title="Last 7 days · active time">
                 <UsageBars data={d.daily} height={170} showIdle={false} />
               </Card>
-              {settings?.trackWindowTitles && (
-                <Card title={live ? 'Windows today' : 'Windows this day'}>
-                  {!contexts.data?.length ? (
-                    <div className="text-[12.5px] text-muted">No window titles recorded yet for this app.</div>
-                  ) : (
-                    <ul className="divide-y divide-border">
-                      {contexts.data.map((c) => (
-                        <li key={c.title} className="flex items-center gap-3 py-1.5 text-[13px]">
-                          <span className="flex-1 truncate" title={c.title}>
-                            {c.title}
-                          </span>
-                          <span className="num text-secondary">{fmtDuration(c.ms)}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </Card>
-              )}
               <ManageCard
                 app={d.app}
                 cats={cats.data ?? []}
-                allApps={allApps}
-                children={mergedInto.get(d.app.id) ?? []}
                 onChanged={() => {
                   detail.refresh()
                   all.refresh()
@@ -215,48 +179,28 @@ export function Applications(): JSX.Element {
 function ManageCard({
   app,
   cats,
-  allApps,
-  children,
   onChanged
 }: {
   app: AppInfo
   cats: Category[]
-  allApps: AppInfo[]
-  children: AppInfo[]
   onChanged: () => void
 }): JSX.Element {
   const [name, setName] = useState(app.displayName)
-  const [editing, setEditing] = useState(false)
-  const [target, setTarget] = useState<number | ''>('')
-  useEffect(() => {
-    setName(app.displayName)
-    setEditing(false)
-    setTarget('')
-  }, [app.id, app.displayName])
-
-  const targets = allApps.filter((a) => a.id !== app.id && !a.hidden && a.mergedInto === null)
+  useEffect(() => setName(app.displayName), [app.id, app.displayName])
+  const renamed = name.trim() !== '' && name.trim() !== app.displayName
 
   const rename = async (): Promise<void> => {
-    if (name.trim() && name.trim() !== app.displayName) await window.api.renameApp(app.id, name)
-    setEditing(false)
+    if (!renamed) return
+    await window.api.renameApp(app.id, name.trim())
     onChanged()
   }
   const hide = async (): Promise<void> => {
     await window.api.hideApp(app.id, true)
     onChanged()
   }
-  const merge = async (): Promise<void> => {
-    if (target === '') return
-    await window.api.mergeApp(app.id, Number(target))
-    onChanged()
-  }
-  const unmerge = async (id: number): Promise<void> => {
-    await window.api.unmergeApp(id)
-    onChanged()
-  }
 
   return (
-    <Card title="Manage">
+    <Card title={`Manage ${app.displayName}`}>
       <div className="flex flex-col gap-4 text-[13px]">
         <div>
           <div className="text-secondary text-[12.5px] mb-1.5">Category</div>
@@ -278,64 +222,23 @@ function ManageCard({
         </div>
         <div>
           <div className="text-secondary text-[12.5px] mb-1.5">Name</div>
-          {editing ? (
-            <div className="flex gap-2">
-              <input
-                type="text"
-                value={name}
-                maxLength={60}
-                autoFocus
-                onChange={(e) => setName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') void rename()
-                  if (e.key === 'Escape') setEditing(false)
-                }}
-                className="flex-1 !py-1.5"
-              />
-              <button className="btn btn-accent !py-1.5" onClick={rename}>
-                Save
-              </button>
-            </div>
-          ) : (
-            <button className="btn !py-1.5 inline-flex items-center gap-2" onClick={() => setEditing(true)}>
-              <Pencil size={13} /> Rename
-            </button>
-          )}
-        </div>
-
-        <div>
-          <div className="text-secondary text-[12.5px] mb-1.5">Report together with</div>
           <div className="flex gap-2">
-            <select value={target} onChange={(e) => setTarget(e.target.value === '' ? '' : Number(e.target.value))} className="flex-1 !py-1.5 text-[12.5px]">
-              <option value="">Choose an application</option>
-              {targets.map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.displayName}
-                </option>
-              ))}
-            </select>
-            <button className="btn !py-1.5 inline-flex items-center gap-2" onClick={merge} disabled={target === ''}>
-              <GitMerge size={13} /> Merge
+            <input
+              type="text"
+              value={name}
+              maxLength={60}
+              aria-label="Application name"
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') void rename()
+                if (e.key === 'Escape') setName(app.displayName)
+              }}
+              className="flex-1 !py-1.5"
+            />
+            <button className="btn btn-accent !py-1.5" onClick={rename} disabled={!renamed}>
+              Save
             </button>
           </div>
-          <div className="text-muted text-[12px] mt-1.5">
-            This app disappears from lists and its time is counted under the chosen one. Reversible.
-          </div>
-          {children.length > 0 && (
-            <ul className="mt-2 divide-y divide-border">
-              {children.map((c) => (
-                <li key={c.id} className="flex items-center gap-2 py-1.5">
-                  <AppIcon icon={c.icon} name={c.displayName} appId={c.id} size={18} />
-                  <span className="flex-1 truncate">
-                    {c.displayName} <span className="text-muted text-[12px]">{c.exeName}</span>
-                  </span>
-                  <button className="btn btn-ghost !py-1 !px-2 text-[12.5px] inline-flex items-center gap-1.5" onClick={() => unmerge(c.id)}>
-                    <Undo2 size={13} /> Separate
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
 
         <div>
@@ -354,6 +257,23 @@ function CategoriesCard({ cats, onChanged }: { cats: Category[]; onChanged: () =
   const [newName, setNewName] = useState('')
   const [editing, setEditing] = useState<number | null>(null)
   const [draft, setDraft] = useState('')
+  // Category whose color palette is open. Click-toggled: a hover popover lost the pointer in the gap below the dot.
+  const [colorFor, setColorFor] = useState<number | null>(null)
+  useEffect(() => {
+    if (colorFor === null) return
+    const close = (e: MouseEvent): void => {
+      if (!(e.target as HTMLElement).closest('[data-color-picker]')) setColorFor(null)
+    }
+    const esc = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setColorFor(null)
+    }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', esc)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', esc)
+    }
+  }, [colorFor])
 
   const add = async (): Promise<void> => {
     if (!newName.trim()) return
@@ -373,24 +293,32 @@ function CategoriesCard({ cats, onChanged }: { cats: Category[]; onChanged: () =
       <ul className="divide-y divide-border">
         {cats.map((c) => (
           <li key={c.id} className="flex items-center gap-3 py-2 text-[13.5px]">
-            <div className="relative group">
-              <button className="grid place-items-center w-5 h-5" aria-label="Change color">
+            <div className="relative" data-color-picker>
+              <button
+                className="grid place-items-center w-5 h-5 rounded-md hover:bg-[var(--control)]"
+                aria-label="Change color"
+                aria-expanded={colorFor === c.id}
+                onClick={() => setColorFor(colorFor === c.id ? null : c.id)}
+              >
                 <Dot color={c.color} size={12} />
               </button>
-              <div className="absolute left-0 top-6 z-10 hidden group-hover:flex gap-1 p-1.5 rounded-lg card">
-                {CATEGORY_COLORS.map((col) => (
-                  <button
-                    key={col}
-                    className="w-4 h-4 rounded-full"
-                    style={{ background: col, outline: col === c.color ? '2px solid #fff' : undefined, outlineOffset: 1 }}
-                    onClick={() => {
-                      setDraft(c.name)
-                      void save({ ...c, name: c.name }, col)
-                    }}
-                    aria-label={`Use color ${col}`}
-                  />
-                ))}
-              </div>
+              {colorFor === c.id && (
+                <div className="absolute left-0 top-full mt-1 z-10 grid gap-1.5 p-2 rounded-lg card shadow-xl w-max" style={{ gridTemplateColumns: 'repeat(9, 20px)' }}>
+                  {CATEGORY_COLORS.map((col) => (
+                    <button
+                      key={col}
+                      className="w-5 h-5 rounded-full transition-transform hover:scale-110"
+                      style={{ background: col, outline: col === c.color ? '2px solid var(--primary)' : undefined, outlineOffset: 2 }}
+                      onClick={() => {
+                        setColorFor(null)
+                        setDraft(c.name)
+                        void save({ ...c, name: c.name }, col)
+                      }}
+                      aria-label={`Use color ${col}`}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
             {editing === c.id ? (
               <input

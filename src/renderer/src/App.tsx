@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
-import { AppWindow, BarChart3, Clock, Hourglass, LayoutDashboard, Settings as SettingsIcon, Target } from 'lucide-react'
+import { AppWindow, BarChart3, Clock, Hourglass, LayoutDashboard, Settings as SettingsIcon, Target, Flame } from 'lucide-react'
 import type { Appearance, Page as PageId, Settings as SettingsT, TrackerStatus } from '../../shared/types'
 import { applyAppearance } from '@/lib/theme'
 import { Onboarding } from '@/components/Onboarding'
@@ -15,6 +15,9 @@ import { Focus } from '@/pages/Focus'
 import { Limits } from '@/pages/Limits'
 import { Reports } from '@/pages/Reports'
 import { Settings } from '@/pages/Settings'
+import { Streaks } from '@/pages/Streaks'
+import logo from '../../../resources/logo.png'
+import { setDayStartHour } from '@/lib/format'
 
 const NAV: { id: PageId; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'overview', label: 'Overview', icon: LayoutDashboard },
@@ -22,6 +25,7 @@ const NAV: { id: PageId; label: string; icon: typeof LayoutDashboard }[] = [
   { id: 'apps', label: 'Applications', icon: AppWindow },
   { id: 'focus', label: 'Focus', icon: Target },
   { id: 'limits', label: 'Limits', icon: Hourglass },
+  { id: 'streaks', label: 'Streaks', icon: Flame },
   { id: 'reports', label: 'Reports', icon: BarChart3 },
   { id: 'settings', label: 'Settings', icon: SettingsIcon }
 ]
@@ -33,7 +37,10 @@ export default function App(): JSX.Element {
 
   useEffect(() => {
     void window.api.trackerStatus().then(setStatus)
-    void window.api.getSettings().then(setSettings)
+    void window.api.getSettings().then((s) => {
+      setDayStartHour(s.dayStartHour)
+      setSettings(s)
+    })
   }, [])
   useEvent<TrackerStatus>('tracker:status', setStatus)
   useEvent<PageId>('navigate', (p) => setPage(p))
@@ -66,14 +73,22 @@ export default function App(): JSX.Element {
   return (
     <div className="h-full flex flex-col relative">
       {settings && (!settings.onboardingDone || new URLSearchParams(window.location.search).has('onboarding')) && (
-        <Onboarding settings={settings} onDone={setSettings} />
+        <Onboarding
+          settings={settings}
+          onDone={(s) => {
+            setDayStartHour(s.dayStartHour)
+            setSettings(s)
+          }}
+        />
       )}
       {/* title bar: draggable, leaves room for the native window controls on the right */}
-      <header className="topbar drag-region h-11 shrink-0 flex items-center justify-between pl-5 pr-[150px] border-b border-border">
+      {/* Height and width come from the Windows controls overlay itself, so the bar always matches the native buttons. */}
+      <header
+        className="topbar drag-region shrink-0 flex items-center justify-between pl-5 pr-4 border-b border-border"
+        style={{ height: 'env(titlebar-area-height, 47px)', width: 'env(titlebar-area-width, 100%)' }}
+      >
         <div className="flex items-center gap-2.5">
-          <span className="w-4 h-4 rounded-full grid place-items-center" style={{ background: 'var(--accent)' }}>
-            <span className="w-1.5 h-1.5 rounded-full bg-white" />
-          </span>
+          <img src={logo} alt="" className="w-[18px] h-[18px] select-none" draggable={false} />
           <span className="text-[12px] font-semibold tracking-[0.14em] text-secondary">DESKTIME</span>
         </div>
         <div className="no-drag flex items-center gap-2 text-[12.5px] text-secondary">
@@ -124,6 +139,7 @@ export default function App(): JSX.Element {
             {page === 'apps' && <Applications key="apps" />}
             {page === 'focus' && <Focus key="focus" />}
             {page === 'limits' && <Limits key="limits" />}
+            {page === 'streaks' && <Streaks key="streaks" />}
             {page === 'reports' && <Reports key="reports" />}
             {page === 'settings' && <Settings key="settings" status={status} />}
           </AnimatePresence>

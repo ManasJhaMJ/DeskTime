@@ -3,6 +3,7 @@ import { Check, ShieldOff } from 'lucide-react'
 import type { AppInfo, FocusSession, FocusStats } from '../../../shared/types'
 import { useEvent, useNow, usePoll } from '@/lib/hooks'
 import { fmtClock, fmtDuration, fmtTime, today } from '@/lib/format'
+import { DURATION_HINT, fmtMinutes, parseDuration } from '@/lib/duration'
 import { AppIcon, Card, Empty, Page, PageHeader, Ring, Segmented, StatTile } from '@/components/ui'
 import { AppPicker } from '@/components/AppPicker'
 
@@ -31,9 +32,17 @@ export function Focus(): JSX.Element {
 
   const appById = new Map((apps.data ?? []).map((a) => [a.id, a]))
 
+  // The custom field wins as soon as it has text; otherwise the selected preset applies.
+  const customMinutes = custom.trim() ? parseDuration(custom) : null
+  const plannedMinutes = custom.trim() ? customMinutes : minutes
+  const canStart = plannedMinutes !== null && !!apps.data
+
   const start = async (): Promise<void> => {
-    const mins = custom ? Math.max(1, parseInt(custom, 10) || minutes) : minutes
-    setFocus(await window.api.focusStart(label, mins, allowed, restricted))
+    if (plannedMinutes === null) return
+    setFocus(await window.api.focusStart(label, plannedMinutes, allowed, restricted))
+  }
+  const startOnEnter = (e: React.KeyboardEvent): void => {
+    if (e.key === 'Enter' && canStart) void start()
   }
   const end = async (): Promise<void> => {
     await window.api.focusEnd()
@@ -100,36 +109,44 @@ export function Focus(): JSX.Element {
             <div className="flex flex-col gap-4">
               <label className="flex flex-col gap-1.5">
                 <span className="text-[12.5px] text-secondary">What are you working on?</span>
-                <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} maxLength={60} placeholder="DSA preparation" />
+                <input type="text" value={label} onChange={(e) => setLabel(e.target.value)} onKeyDown={startOnEnter} maxLength={60} placeholder="DSA preparation" />
               </label>
               <div className="flex flex-col gap-1.5">
                 <span className="text-[12.5px] text-secondary">Duration</span>
                 <div className="flex items-center gap-2 flex-wrap">
                   <Segmented
                     options={DURATIONS.map((m) => ({ value: m, label: m >= 60 ? `${Math.floor(m / 60)}h${m % 60 ? ` ${m % 60}m` : ''}` : `${m}m` }))}
-                    value={custom ? -1 : minutes}
+                    value={custom.trim() ? -1 : minutes}
                     onChange={(v) => {
                       setMinutes(v)
                       setCustom('')
                     }}
                   />
                   <input
-                    type="number"
-                    min={1}
-                    max={600}
+                    type="text"
+                    inputMode="decimal"
                     value={custom}
                     onChange={(e) => setCustom(e.target.value)}
-                    placeholder="Custom (min)"
-                    className="w-[120px]"
+                    onKeyDown={startOnEnter}
+                    placeholder="Custom, e.g. 20 or 1h 30m"
+                    aria-label="Custom duration"
+                    aria-invalid={custom.trim() !== '' && customMinutes === null}
+                    className="w-[190px]"
+                    style={custom.trim() && customMinutes === null ? { borderColor: 'var(--danger)' } : undefined}
                   />
                 </div>
+                {custom.trim() !== '' && (
+                  <div className={`text-[12px] ${customMinutes === null ? 'text-danger' : 'text-muted'}`}>
+                    {customMinutes === null ? DURATION_HINT : `Session length: ${fmtMinutes(customMinutes)}`}
+                  </div>
+                )}
               </div>
               <div className="text-[12.5px] text-muted leading-relaxed">
                 Restricted applications are minimized the moment they come to the front, with a reminder. Allowed applications are
                 a note to yourself and are never blocked.
               </div>
-              <button className="btn btn-accent self-start mt-auto" onClick={start} disabled={!apps.data}>
-                Start focus session
+              <button className="btn btn-accent self-start mt-auto" onClick={start} disabled={!canStart}>
+                {plannedMinutes !== null ? `Start ${fmtMinutes(plannedMinutes)} session` : 'Start focus session'}
               </button>
             </div>
             <div className="grid grid-cols-2 gap-3">

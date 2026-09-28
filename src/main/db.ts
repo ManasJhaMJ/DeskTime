@@ -1,13 +1,15 @@
 // SQLite storage. All queries are synchronous (better-sqlite3) and run in the main process.
 import Database from 'better-sqlite3'
+import { statSync } from 'fs'
 import type {
   AppDetail,
+  CompactResult,
+  DataInfo,
   AppInfo,
   AppLimit,
   AppUsage,
   Category,
   CategoryUsage,
-  ContextUsage,
   DailyPoint,
   DaySummary,
   FocusSession,
@@ -16,6 +18,8 @@ import type {
   LimitMode,
   MonthlyReport,
   Settings,
+  Streak,
+  StreakKind,
   TimelineSegment,
   Transition,
   WeeklyReport
@@ -24,17 +28,28 @@ import { DEFAULT_SETTINGS } from '../shared/types'
 import { DEFAULT_CATEGORIES, familyFromWindowsAppsPath, friendlyName, SYSTEM_PROCESSES } from './win32'
 
 const pad = (n: number): string => String(n).padStart(2, '0')
+
+/** Hour at which a day begins (Settings > Tracking > Day starts at). Local time before it belongs to the previous day. */
+let dayStartHour = 0
+export function setDayStartHour(hour: number): void {
+  dayStartHour = Math.max(0, Math.min(23, Math.round(hour)))
+}
+export const getDayStartHour = (): number => dayStartHour
+
 export const toDay = (ts: number): string => {
   const d = new Date(ts)
+  if (d.getHours() < dayStartHour) d.setDate(d.getDate() - 1)
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 export const dayStart = (day: string): number => {
   const [y, m, d] = day.split('-').map(Number)
-  return new Date(y, m - 1, d).getTime()
+  return new Date(y, m - 1, d, dayStartHour).getTime()
 }
+/** Calendar arithmetic on day labels; independent of the day-start hour. */
 export const addDays = (day: string, n: number): string => {
   const [y, m, d] = day.split('-').map(Number)
-  return toDay(new Date(y, m - 1, d + n).getTime())
+  const x = new Date(y, m - 1, d + n, 12)
+  return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`
 }
 export const today = (): string => toDay(Date.now())
 
@@ -165,8 +180,10 @@ function splitByHour(start: number, end: number, fn: (hour: number, ms: number) 
 
 export class DB {
   readonly db: Database.Database
+  private readonly file: string
 
   constructor(file: string) {
+    this.file = file
     this.db = new Database(file)
     this.db.pragma('journal_mode = WAL')
     this.db.pragma('synchronous = NORMAL')
@@ -270,6 +287,51 @@ export class DB {
       for (const c of DEFAULT_CATEGORIES) if (old[c.name]) upd.run(c.color, c.name, old[c.name])
       this.db.pragma('user_version = 5')
     }
+    if (version < 6) {
+      // Retention: days older than the retention window keep only per-app daily totals (see compact()).
+      // Window-title recording was removed in beta.2; its table goes with it.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS daily_totals (
+          day TEXT NOT NULL,
+          app_id INTEGER NOT NULL REFERENCES apps(id),
+          active INTEGER NOT NULL DEFAULT 0,
+          passive INTEGER NOT NULL DEFAULT 0,
+          idle INTEGER NOT NULL DEFAULT 0,
+          sessions INTEGER NOT NULL DEFAULT 0,
+          longest INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (day, app_id)
+        ) WITHOUT ROWID;
+        CREATE INDEX IF NOT EXISTS idx_daily_totals_app ON daily_totals(app_id, day);
+        CREATE TABLE IF NOT EXISTS daily_summary (
+          day TEXT PRIMARY KEY,
+          sessions INTEGER NOT NULL DEFAULT 0,
+          longest INTEGER NOT NULL DEFAULT 0,
+          longest_start INTEGER,
+          longest_end INTEGER,
+          switches INTEGER NOT NULL DEFAULT 0,
+          first_activity INTEGER,
+          last_activity INTEGER
+        ) WITHOUT ROWID;
+        DROP TABLE IF EXISTS contexts;
+      `)
+      this.db.pragma('user_version = 6')
+    }
+    if (version < 7) {
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS streaks (
+          id INTEGER PRIMARY KEY,
+          kind TEXT NOT NULL,
+          target INTEGER NOT NULL,
+          ref_id INTEGER,
+          created_day TEXT NOT NULL
+        );
+      `)
+      this.db.pragma('user_version = 7')
+    }
+    if (version < 8) {
+      this.db.exec('CREATE TABLE IF NOT EXISTS streak_freezes (streak_id INTEGER NOT NULL REFERENCES streaks(id) ON DELETE CASCADE, day TEXT NOT NULL, PRIMARY KEY (streak_id, day)) WITHOUT ROWID')
+      this.db.pragma('user_version = 8')
+    }
   }
 
   /**
@@ -306,7 +368,15 @@ export class DB {
   /** Moves every reference from `source` to `target` and deletes `source`. Used for true duplicates only. */
   private absorbApp(source: number, target: number): void {
     this.db.prepare('UPDATE sessions SET app_id = ? WHERE app_id = ?').run(target, source)
-    this.db.prepare('UPDATE contexts SET app_id = ? WHERE app_id = ?').run(target, source)
+    this.db
+      .prepare(
+        `INSERT INTO daily_totals (day, app_id, active, passive, idle, sessions, longest)
+         SELECT day, ?, active, passive, idle, sessions, longest FROM daily_totals WHERE app_id = ?
+         ON CONFLICT(day, app_id) DO UPDATE SET active = active + excluded.active, passive = passive + excluded.passive,
+           idle = idle + excluded.idle, sessions = sessions + excluded.sessions, longest = MAX(longest, excluded.longest)`
+      )
+      .run(target, source)
+    this.db.prepare('DELETE FROM daily_totals WHERE app_id = ?').run(source)
     this.db.prepare('UPDATE apps SET merged_into = ? WHERE merged_into = ?').run(target, source)
     this.db.prepare('DELETE FROM limits WHERE app_id = ? AND EXISTS (SELECT 1 FROM limits WHERE app_id = ?)').run(source, target)
     this.db.prepare('UPDATE limits SET app_id = ? WHERE app_id = ?').run(target, source)
@@ -332,6 +402,17 @@ export class DB {
     dayTotals: Database.Statement
     rangeDaily: Database.Statement
     rangeApps: Database.Statement
+    compactedDayApps: Database.Statement
+    compactedDaySummary: Database.Statement
+    categoryDaily: Database.Statement
+    focusDaily: Database.Statement
+    listStreaks: Database.Statement
+    insertStreak: Database.Statement
+    deleteStreak: Database.Statement
+    listFrozen: Database.Statement
+    countFrozen: Database.Statement
+    insertFrozen: Database.Statement
+    deleteFrozen: Database.Statement
     setHidden: Database.Statement
     setMerged: Database.Statement
     repointMerged: Database.Statement
@@ -353,11 +434,7 @@ export class DB {
     deleteCategory: Database.Statement
     setAppCategory: Database.Statement
     categoryForExe: Database.Statement
-    dayCategories: Database.Statement
     rangeCategories: Database.Statement
-    insertContext: Database.Statement
-    updateContextEnd: Database.Statement
-    appContexts: Database.Statement
     getMeta: Database.Statement
     setMeta: Database.Statement
   }
@@ -387,33 +464,74 @@ export class DB {
          FROM sessions s JOIN apps a ON a.id = s.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
          WHERE s.day BETWEEN ? AND ? AND e.hidden = 0 ORDER BY s.start_ts`
       ),
+      // Range and total queries read raw sessions for recent days and daily_totals for compacted days.
+      // A day lives in exactly one of the two tables (see compact()), so the UNION never double counts.
       appDaily: p(
-        `SELECT day, SUM(CASE WHEN is_idle IN (0, 2) THEN end_ts - start_ts ELSE 0 END) AS active,
-                SUM(CASE WHEN is_idle = 1 THEN end_ts - start_ts ELSE 0 END) AS idle
-         FROM sessions WHERE app_id IN (SELECT id FROM apps WHERE id = ? OR merged_into = ?)
-           AND day BETWEEN ? AND ? GROUP BY day`
+        `SELECT day, SUM(active) AS active, SUM(idle) AS idle FROM (
+           SELECT day, CASE WHEN is_idle IN (0, 2) THEN end_ts - start_ts ELSE 0 END AS active,
+                  CASE WHEN is_idle = 1 THEN end_ts - start_ts ELSE 0 END AS idle
+           FROM sessions WHERE app_id IN (SELECT id FROM apps WHERE id = ? OR merged_into = ?) AND day BETWEEN ? AND ?
+           UNION ALL
+           SELECT day, active, idle FROM daily_totals
+           WHERE app_id IN (SELECT id FROM apps WHERE id = ? OR merged_into = ?) AND day BETWEEN ? AND ?
+         ) GROUP BY day`
       ),
       appDayActive: p(
-        `SELECT COALESCE(SUM(end_ts - start_ts), 0) AS ms FROM sessions
-         WHERE app_id IN (SELECT id FROM apps WHERE id = ? OR merged_into = ?) AND day = ? AND is_idle IN (0, 2)`
+        `SELECT COALESCE(SUM(ms), 0) AS ms FROM (
+           SELECT end_ts - start_ts AS ms FROM sessions
+           WHERE app_id IN (SELECT id FROM apps WHERE id = ? OR merged_into = ?) AND day = ? AND is_idle IN (0, 2)
+           UNION ALL
+           SELECT active FROM daily_totals WHERE app_id IN (SELECT id FROM apps WHERE id = ? OR merged_into = ?) AND day = ?
+         )`
       ),
       dayTotals: p(
-        `SELECT COALESCE(SUM(s.end_ts - s.start_ts), 0) AS screen,
-                COALESCE(SUM(CASE WHEN s.is_idle IN (0, 2) THEN s.end_ts - s.start_ts ELSE 0 END), 0) AS active
-         FROM sessions s JOIN apps a ON a.id = s.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
-         WHERE s.day = ? AND e.hidden = 0`
+        `SELECT COALESCE(SUM(u.screen), 0) AS screen, COALESCE(SUM(u.active), 0) AS active FROM (
+           SELECT app_id, end_ts - start_ts AS screen,
+                  CASE WHEN is_idle IN (0, 2) THEN end_ts - start_ts ELSE 0 END AS active FROM sessions WHERE day = ?
+           UNION ALL
+           SELECT app_id, active + idle, active FROM daily_totals WHERE day = ?
+         ) u JOIN apps a ON a.id = u.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
+         WHERE e.hidden = 0`
       ),
       rangeDaily: p(
-        `SELECT s.day, SUM(CASE WHEN s.is_idle IN (0, 2) THEN s.end_ts - s.start_ts ELSE 0 END) AS active,
-                SUM(CASE WHEN s.is_idle = 1 THEN s.end_ts - s.start_ts ELSE 0 END) AS idle
-         FROM sessions s JOIN apps a ON a.id = s.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
-         WHERE s.day BETWEEN ? AND ? AND e.hidden = 0 GROUP BY s.day`
+        `SELECT u.day, SUM(u.active) AS active, SUM(u.idle) AS idle FROM (
+           SELECT day, app_id, CASE WHEN is_idle IN (0, 2) THEN end_ts - start_ts ELSE 0 END AS active,
+                  CASE WHEN is_idle = 1 THEN end_ts - start_ts ELSE 0 END AS idle FROM sessions WHERE day BETWEEN ? AND ?
+           UNION ALL
+           SELECT day, app_id, active, idle FROM daily_totals WHERE day BETWEEN ? AND ?
+         ) u JOIN apps a ON a.id = u.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
+         WHERE e.hidden = 0 GROUP BY u.day`
       ),
       rangeApps: p(
-        `SELECT e.id, e.display_name, e.icon,
-                SUM(CASE WHEN s.is_idle IN (0, 2) THEN s.end_ts - s.start_ts ELSE 0 END) AS active
-         FROM sessions s JOIN apps a ON a.id = s.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
-         WHERE s.day BETWEEN ? AND ? AND e.hidden = 0 GROUP BY e.id ORDER BY active DESC LIMIT ?`
+        `SELECT e.id, e.display_name, e.icon, SUM(u.active) AS active FROM (
+           SELECT app_id, CASE WHEN is_idle IN (0, 2) THEN end_ts - start_ts ELSE 0 END AS active FROM sessions WHERE day BETWEEN ? AND ?
+           UNION ALL
+           SELECT app_id, active FROM daily_totals WHERE day BETWEEN ? AND ?
+         ) u JOIN apps a ON a.id = u.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
+         WHERE e.hidden = 0 GROUP BY e.id ORDER BY active DESC LIMIT ?`
+      ),
+      compactedDaySummary: p('SELECT * FROM daily_summary WHERE day = ?'),
+      categoryDaily: p(
+        `SELECT u.day, SUM(u.active) AS active FROM (
+           SELECT day, app_id, CASE WHEN is_idle IN (0, 2) THEN end_ts - start_ts ELSE 0 END AS active FROM sessions WHERE day BETWEEN ? AND ?
+           UNION ALL
+           SELECT day, app_id, active FROM daily_totals WHERE day BETWEEN ? AND ?
+         ) u JOIN apps a ON a.id = u.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
+         WHERE e.hidden = 0 AND e.category_id = ? GROUP BY u.day`
+      ),
+      focusDaily: p('SELECT day, SUM(COALESCE(end_ts, ?) - start_ts) AS ms FROM focus_sessions WHERE day BETWEEN ? AND ? GROUP BY day'),
+      listStreaks: p('SELECT * FROM streaks ORDER BY id'),
+      insertStreak: p('INSERT INTO streaks (kind, target, ref_id, created_day) VALUES (?, ?, ?, ?)'),
+      deleteStreak: p('DELETE FROM streaks WHERE id = ?'),
+      listFrozen: p('SELECT day FROM streak_freezes WHERE streak_id = ? AND day BETWEEN ? AND ?'),
+      countFrozen: p("SELECT COUNT(*) AS c FROM streak_freezes WHERE streak_id = ? AND substr(day, 1, 7) = ?"),
+      insertFrozen: p('INSERT OR IGNORE INTO streak_freezes (streak_id, day) VALUES (?, ?)'),
+      deleteFrozen: p('DELETE FROM streak_freezes WHERE streak_id = ? AND day = ?'),
+      compactedDayApps: p(
+        `SELECT e.id AS app_id, SUM(t.active) AS active, SUM(t.passive) AS passive, SUM(t.idle) AS idle,
+                SUM(t.sessions) AS sessions, MAX(t.longest) AS longest
+         FROM daily_totals t JOIN apps a ON a.id = t.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
+         WHERE t.day = ? AND e.hidden = 0 GROUP BY e.id`
       ),
       setHidden: p('UPDATE apps SET hidden = ? WHERE id = ?'),
       setMerged: p('UPDATE apps SET merged_into = ? WHERE id = ?'),
@@ -445,24 +563,13 @@ export class DB {
       deleteCategory: p('DELETE FROM categories WHERE id = ?'),
       setAppCategory: p('UPDATE apps SET category_id = ? WHERE id = ?'),
       categoryForExe: p('SELECT category_id FROM apps WHERE lower(exe_name) = ? AND category_id IS NOT NULL LIMIT 1'),
-      dayCategories: p(
-        `SELECT e.category_id AS id, COUNT(DISTINCT e.id) AS apps,
-                SUM(CASE WHEN s.is_idle IN (0, 2) THEN s.end_ts - s.start_ts ELSE 0 END) AS active
-         FROM sessions s JOIN apps a ON a.id = s.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
-         WHERE s.day = ? AND e.hidden = 0 GROUP BY e.category_id`
-      ),
       rangeCategories: p(
-        `SELECT e.category_id AS id, COUNT(DISTINCT e.id) AS apps,
-                SUM(CASE WHEN s.is_idle IN (0, 2) THEN s.end_ts - s.start_ts ELSE 0 END) AS active
-         FROM sessions s JOIN apps a ON a.id = s.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
-         WHERE s.day BETWEEN ? AND ? AND e.hidden = 0 GROUP BY e.category_id`
-      ),
-      insertContext: p('INSERT INTO contexts (app_id, title, start_ts, end_ts, day) VALUES (?, ?, ?, ?, ?)'),
-      updateContextEnd: p('UPDATE contexts SET end_ts = ? WHERE id = ?'),
-      appContexts: p(
-        `SELECT c.title, SUM(c.end_ts - c.start_ts) AS ms, COUNT(*) AS count
-         FROM contexts c JOIN apps a ON a.id = c.app_id
-         WHERE COALESCE(a.merged_into, a.id) = ? AND c.day = ? GROUP BY c.title ORDER BY ms DESC LIMIT ?`
+        `SELECT e.category_id AS id, COUNT(DISTINCT e.id) AS apps, SUM(u.active) AS active FROM (
+           SELECT app_id, CASE WHEN is_idle IN (0, 2) THEN end_ts - start_ts ELSE 0 END AS active FROM sessions WHERE day BETWEEN ? AND ?
+           UNION ALL
+           SELECT app_id, active FROM daily_totals WHERE day BETWEEN ? AND ?
+         ) u JOIN apps a ON a.id = u.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
+         WHERE e.hidden = 0 GROUP BY e.category_id`
       ),
       getMeta: p('SELECT value FROM meta WHERE key = ?'),
       setMeta: p('INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
@@ -470,6 +577,11 @@ export class DB {
   }
 
   close(): void {
+    try {
+      this.db.pragma('optimize')
+    } catch {
+      /* best effort */
+    }
     this.db.close()
   }
 
@@ -561,11 +673,11 @@ export class DB {
   }
 
   dayCategories(day: string): CategoryUsage[] {
-    return this.categoriesFrom(this.stmts.dayCategories.all(day) as { id: number | null; apps: number; active: number }[])
+    return this.rangeCategories(day, day)
   }
 
   rangeCategories(fromDay: string, toDay_: string): CategoryUsage[] {
-    return this.categoriesFrom(this.stmts.rangeCategories.all(fromDay, toDay_) as { id: number | null; apps: number; active: number }[])
+    return this.categoriesFrom(this.stmts.rangeCategories.all(fromDay, toDay_, fromDay, toDay_) as { id: number | null; apps: number; active: number }[])
   }
 
   private categoriesFrom(rows: { id: number | null; apps: number; active: number }[]): CategoryUsage[] {
@@ -577,24 +689,6 @@ export class DB {
       out.push({ ...c, activeMs: r.active, apps: r.apps })
     }
     return out.sort((a, b) => b.activeMs - a.activeMs)
-  }
-
-  // ---- window-title contexts (opt-in) -----------------------------------
-
-  insertContext(appId: number, title: string, start: number, end: number): number {
-    return Number(this.stmts.insertContext.run(appId, title, start, end, toDay(start)).lastInsertRowid)
-  }
-
-  updateContextEnd(id: number, end: number): void {
-    this.stmts.updateContextEnd.run(end, id)
-  }
-
-  appContexts(appId: number, day: string, limit = 12): ContextUsage[] {
-    return this.stmts.appContexts.all(appId, day, limit) as ContextUsage[]
-  }
-
-  clearContexts(): void {
-    this.db.exec('DELETE FROM contexts')
   }
 
   // ---- misc persisted state (digest bookkeeping) ------------------------
@@ -646,24 +740,6 @@ export class DB {
   }
 
   /** Reports `sourceId` (and anything already merged into it) under `targetId`. Reversible with unmergeApp. */
-  mergeApp(sourceId: number, targetId: number): void {
-    if (sourceId === targetId) return
-    const target = this.getApp(targetId)
-    if (!target) return
-    const finalTarget = target.mergedInto ?? target.id
-    if (finalTarget === sourceId) return
-    const tx = this.db.transaction(() => {
-      this.stmts.repointMerged.run(finalTarget, sourceId)
-      this.stmts.setMerged.run(finalTarget, sourceId)
-      this.db.prepare('DELETE FROM limits WHERE app_id = ?').run(sourceId)
-    })
-    tx()
-  }
-
-  unmergeApp(id: number): void {
-    this.stmts.setMerged.run(null, id)
-  }
-
   // ---- sessions ---------------------------------------------------------
 
   /** kind: 0 active (input), 1 idle, 2 passive (no input, within the passive band). */
@@ -684,16 +760,20 @@ export class DB {
   }
 
   dayTotals(day: string): { screenMs: number; activeMs: number } {
-    const r = this.stmts.dayTotals.get(day) as { screen: number; active: number }
+    const r = this.stmts.dayTotals.get(day, day) as { screen: number; active: number }
     return { screenMs: r.screen, activeMs: r.active }
   }
 
   appActiveMs(appId: number, day: string): number {
-    return (this.stmts.appDayActive.get(appId, appId, day) as { ms: number }).ms
+    return (this.stmts.appDayActive.get(appId, appId, day, appId, appId, day) as { ms: number }).ms
   }
 
   daySummary(day: string): DaySummary {
     const rows = this.daySessions(day)
+    if (rows.length === 0) {
+      const compacted = this.compactedDaySummary(day)
+      if (compacted) return compacted
+    }
     let screenMs = 0
     let activeMs = 0
     let passiveMs = 0
@@ -742,6 +822,7 @@ export class DB {
 
   dayApps(day: string): AppUsage[] {
     const rows = this.daySessions(day)
+    if (rows.length === 0) return this.compactedDayApps(day)
     const byApp = new Map<number, AppUsage & { _cur: Stretch | null }>()
     for (const r of rows) {
       let u = byApp.get(r.app_id)
@@ -779,6 +860,68 @@ export class DB {
     return out.sort((a, b) => b.activeMs + b.idleMs - (a.activeMs + a.idleMs))
   }
 
+  /** Per-app usage for a day that only exists as daily totals. Empty when the day has none. */
+  private compactedDayApps(day: string): AppUsage[] {
+    const rows = this.stmts.compactedDayApps.all(day) as {
+      app_id: number
+      active: number
+      passive: number
+      idle: number
+      sessions: number
+      longest: number
+    }[]
+    const out: AppUsage[] = []
+    for (const r of rows) {
+      const a = this.getApp(r.app_id)
+      if (!a) continue
+      out.push({ ...a, activeMs: r.active, passiveMs: r.passive, idleMs: r.idle, sessions: r.sessions, longestMs: r.longest })
+    }
+    return out.sort((a, b) => b.activeMs + b.idleMs - (a.activeMs + a.idleMs))
+  }
+
+  /**
+   * Day summary for a compacted day: totals from daily_totals, device-level stretches and switches from the
+   * daily_summary row written at compaction time (a snapshot of what was visible then).
+   */
+  private compactedDaySummary(day: string): DaySummary | null {
+    const apps = this.compactedDayApps(day)
+    if (apps.length === 0) return null
+    let activeMs = 0
+    let passiveMs = 0
+    let idleMs = 0
+    let sessions = 0
+    let longest = 0
+    for (const a of apps) {
+      activeMs += a.activeMs
+      passiveMs += a.passiveMs
+      idleMs += a.idleMs
+      sessions += a.sessions
+      longest = Math.max(longest, a.longestMs)
+    }
+    const row = this.stmts.compactedDaySummary.get(day) as
+      | { sessions: number; longest: number; longest_start: number | null; longest_end: number | null; switches: number; first_activity: number | null; last_activity: number | null }
+      | undefined
+    const focus = this.stmts.focusForDay.all(day) as FocusRow[]
+    let focusMs = 0
+    for (const f of focus) focusMs += (f.end_ts ?? f.start_ts) - f.start_ts
+    return {
+      day,
+      screenMs: activeMs + idleMs,
+      activeMs,
+      passiveMs,
+      idleMs,
+      sessions: row?.sessions ?? sessions,
+      longestSessionMs: row?.longest ?? longest,
+      longestSessionStart: row?.longest_start ?? null,
+      longestSessionEnd: row?.longest_end ?? null,
+      switches: row?.switches ?? 0,
+      focusMs,
+      focusSessions: focus.length,
+      firstActivity: row?.first_activity ?? null,
+      lastActivity: row?.last_activity ?? null
+    }
+  }
+
   timeline(day: string): TimelineSegment[] {
     const rows = this.daySessions(day)
     const out: TimelineSegment[] = []
@@ -810,7 +953,7 @@ export class DB {
     const app = this.getApp(appId)
     if (!app) return null
     const from = addDays(day, -6)
-    const rows = this.stmts.appDaily.all(appId, appId, from, day) as { day: string; active: number; idle: number }[]
+    const rows = this.stmts.appDaily.all(appId, appId, from, day, appId, appId, from, day) as { day: string; active: number; idle: number }[]
     const map = new Map(rows.map((r) => [r.day, r]))
     const daily: DailyPoint[] = []
     let total = 0
@@ -823,7 +966,7 @@ export class DB {
       daily.push({ day: d, activeMs, idleMs, screenMs: activeMs + idleMs })
     }
     const yesterday = addDays(day, -1)
-    const yRow = this.stmts.appDaily.get(appId, appId, yesterday, yesterday) as { active: number } | undefined
+    const yRow = this.stmts.appDaily.get(appId, appId, yesterday, yesterday, appId, appId, yesterday, yesterday) as { active: number } | undefined
     const todayUsage = this.dayApps(day).find((a) => a.id === appId)
     return {
       app,
@@ -838,7 +981,7 @@ export class DB {
 
   weekly(startDay: string): WeeklyReport {
     const endDay = addDays(startDay, 6)
-    const rows = this.stmts.rangeDaily.all(startDay, endDay) as { day: string; active: number; idle: number }[]
+    const rows = this.stmts.rangeDaily.all(startDay, endDay, startDay, endDay) as { day: string; active: number; idle: number }[]
     const map = new Map(rows.map((r) => [r.day, r]))
     const days: DailyPoint[] = []
     let totalMs = 0
@@ -859,10 +1002,10 @@ export class DB {
 
   monthly(month: string): MonthlyReport {
     const [y, m] = month.split('-').map(Number)
-    const first = toDay(new Date(y, m - 1, 1).getTime())
+    const first = `${y}-${pad(m)}-01`
     const daysInMonth = new Date(y, m, 0).getDate()
     const last = addDays(first, daysInMonth - 1)
-    const rows = this.stmts.rangeDaily.all(first, last) as { day: string; active: number; idle: number }[]
+    const rows = this.stmts.rangeDaily.all(first, last, first, last) as { day: string; active: number; idle: number }[]
     const map = new Map(rows.map((r) => [r.day, r]))
     const days: DailyPoint[] = []
     let totalMs = 0
@@ -883,7 +1026,7 @@ export class DB {
       totalMs += a + idl
       days.push(point)
     }
-    const top = this.stmts.rangeApps.all(first, last, 6) as {
+    const top = this.stmts.rangeApps.all(first, last, first, last, 6) as {
       id: number
       display_name: string
       icon: string | null
@@ -1022,6 +1165,8 @@ export class DB {
       const saved = JSON.parse(r.value) as Partial<Settings>
       const appearance = { ...DEFAULT_SETTINGS.appearance, ...(saved.appearance ?? {}) }
       if ((appearance.lightBase as string) === 'white') appearance.lightBase = 'sage'
+      // Fonts removed in beta.2 (manrope, inter, nunito, dmsans) fall back to the system font.
+      if (!['system', 'comic', 'saira', 'roboto', 'caveat'].includes(appearance.font)) appearance.font = 'system'
       return { ...DEFAULT_SETTINGS, ...saved, appearance }
     } catch {
       return { ...DEFAULT_SETTINGS }
@@ -1039,16 +1184,17 @@ export class DB {
       exportedAt: new Date().toISOString(),
       apps: this.db.prepare('SELECT id, exe_path, exe_name, display_name, first_seen FROM apps').all(),
       sessions: this.db.prepare('SELECT * FROM sessions ORDER BY start_ts').all(),
+      dailyTotals: this.db.prepare('SELECT * FROM daily_totals ORDER BY day, app_id').all(),
+      dailySummary: this.db.prepare('SELECT * FROM daily_summary ORDER BY day').all(),
       focusSessions: this.db.prepare('SELECT * FROM focus_sessions ORDER BY start_ts').all(),
       limits: this.db.prepare('SELECT * FROM limits').all(),
       categories: this.listCategories(),
-      contexts: this.db.prepare('SELECT * FROM contexts ORDER BY start_ts').all(),
       settings: this.getSettings()
     }
   }
 
   clearUsageData(): void {
-    this.db.exec('DELETE FROM sessions; DELETE FROM focus_sessions; DELETE FROM contexts; VACUUM;')
+    this.db.exec('DELETE FROM sessions; DELETE FROM daily_totals; DELETE FROM daily_summary; DELETE FROM focus_sessions; VACUUM;')
   }
 
   /** Removes every trace of an executable (used to drop self-tracking data recorded by older builds). */
@@ -1058,7 +1204,7 @@ export class DB {
     this.db.exec('BEGIN')
     try {
       this.db.prepare('DELETE FROM sessions WHERE app_id = ?').run(row.id)
-      this.db.prepare('DELETE FROM contexts WHERE app_id = ?').run(row.id)
+      this.db.prepare('DELETE FROM daily_totals WHERE app_id = ?').run(row.id)
       this.db.prepare('DELETE FROM limits WHERE app_id = ?').run(row.id)
       this.db.prepare('DELETE FROM apps WHERE id = ?').run(row.id)
       this.db.exec('COMMIT')
@@ -1068,9 +1214,200 @@ export class DB {
     }
   }
 
-  sizeInfo(): { sessions: number; apps: number; firstDay: string | null } {
+  sizeInfo(): Omit<DataInfo, 'path'> {
     const s = this.db.prepare('SELECT COUNT(*) AS c, MIN(day) AS d FROM sessions').get() as { c: number; d: string | null }
+    const t = this.db.prepare('SELECT COUNT(DISTINCT day) AS c, MIN(day) AS d FROM daily_totals').get() as { c: number; d: string | null }
     const a = this.db.prepare('SELECT COUNT(*) AS c FROM apps').get() as { c: number }
-    return { sessions: s.c, apps: a.c, firstDay: s.d }
+    let bytes = 0
+    for (const suffix of ['', '-wal']) {
+      try {
+        bytes += statSync(this.file + suffix).size
+      } catch {
+        /* WAL may not exist */
+      }
+    }
+    const firstDay = s.d && t.d ? (s.d < t.d ? s.d : t.d) : (s.d ?? t.d)
+    return { sessions: s.c, apps: a.c, firstDay, compactedDays: t.c, detailSince: s.d, bytes }
+  }
+
+  /**
+   * Re-files every raw session and focus session under the day it belongs to for the current day-start hour.
+   * Sessions that straddle the boundary go by their start; compacted days are left as they were recorded.
+   */
+  reassignDays(): void {
+    const offsetSec = dayStartHour * 3600
+    const tx = this.db.transaction(() => {
+      this.db.prepare("UPDATE sessions SET day = strftime('%Y-%m-%d', start_ts / 1000 - ?, 'unixepoch', 'localtime')").run(offsetSec)
+      this.db.prepare("UPDATE focus_sessions SET day = strftime('%Y-%m-%d', start_ts / 1000 - ?, 'unixepoch', 'localtime')").run(offsetSec)
+    })
+    tx()
+  }
+
+  // ---- streaks ----------------------------------------------------------
+
+  listStreaks(): Streak[] {
+    const rows = this.stmts.listStreaks.all() as { id: number; kind: StreakKind; target: number; ref_id: number | null; created_day: string }[]
+    return rows.map((r) => {
+      let refName: string | null = null
+      if (r.ref_id !== null) {
+        if (r.kind === 'appUnder') refName = this.getApp(r.ref_id)?.displayName ?? null
+        else refName = this.listCategories().find((c) => c.id === r.ref_id)?.name ?? null
+      }
+      return { id: r.id, kind: r.kind, target: r.target, refId: r.ref_id, refName, createdDay: r.created_day }
+    })
+  }
+
+  addStreak(kind: StreakKind, target: number, refId: number | null): void {
+    this.stmts.insertStreak.run(kind, Math.max(1, Math.round(target)), refId, today())
+  }
+
+  removeStreak(id: number): void {
+    this.db.transaction(() => {
+      this.db.prepare('DELETE FROM streak_freezes WHERE streak_id = ?').run(id)
+      this.stmts.deleteStreak.run(id)
+    })()
+  }
+
+  frozenDays(streakId: number, fromDay: string, toDay_: string): Set<string> {
+    return new Set((this.stmts.listFrozen.all(streakId, fromDay, toDay_) as { day: string }[]).map((r) => r.day))
+  }
+
+  /** Marks a past day as frozen if the month still has a freeze left. Returns false when none is left. */
+  freezeDay(streakId: number, day: string, perMonth: number): boolean {
+    if (day >= today()) return false
+    const used = (this.stmts.countFrozen.get(streakId, day.slice(0, 7)) as { c: number }).c
+    if (used >= perMonth) return false
+    this.stmts.insertFrozen.run(streakId, day)
+    return true
+  }
+
+  unfreezeDay(streakId: number, day: string): void {
+    this.stmts.deleteFrozen.run(streakId, day)
+  }
+
+  /** Minutes per day that a streak measures, for days in the range that have any. */
+  streakMinutes(streak: Streak, fromDay: string, toDay_: string): Map<string, number> {
+    const out = new Map<string, number>()
+    const put = (day: string, ms: number): void => {
+      out.set(day, ms / 60_000)
+    }
+    switch (streak.kind) {
+      case 'screenUnder':
+      case 'activeAtLeast': {
+        const rows = this.stmts.rangeDaily.all(fromDay, toDay_, fromDay, toDay_) as { day: string; active: number; idle: number }[]
+        for (const r of rows) put(r.day, streak.kind === 'screenUnder' ? r.active + r.idle : r.active)
+        break
+      }
+      case 'categoryAtLeast':
+      case 'categoryUnder': {
+        if (streak.refId === null) break
+        const rows = this.stmts.categoryDaily.all(fromDay, toDay_, fromDay, toDay_, streak.refId) as { day: string; active: number }[]
+        for (const r of rows) put(r.day, r.active)
+        break
+      }
+      case 'appUnder': {
+        if (streak.refId === null) break
+        const id = streak.refId
+        const rows = this.stmts.appDaily.all(id, id, fromDay, toDay_, id, id, fromDay, toDay_) as { day: string; active: number }[]
+        for (const r of rows) put(r.day, r.active)
+        break
+      }
+      case 'focusAtLeast': {
+        const rows = this.stmts.focusDaily.all(Date.now(), fromDay, toDay_) as { day: string; ms: number }[]
+        for (const r of rows) put(r.day, r.ms)
+        break
+      }
+    }
+    return out
+  }
+
+  /** Screen, active and idle per day for the year graph; only days with data are returned. */
+  yearDaily(fromDay: string, toDay_: string): DailyPoint[] {
+    const rows = this.stmts.rangeDaily.all(fromDay, toDay_, fromDay, toDay_) as { day: string; active: number; idle: number }[]
+    return rows.map((r) => ({ day: r.day, activeMs: r.active, idleMs: r.idle, screenMs: r.active + r.idle }))
+  }
+
+  // ---- retention --------------------------------------------------------
+
+  /**
+   * Folds every day before `beforeDay` into daily_totals and deletes its raw sessions.
+   * Each day is moved in its own transaction, so a crash leaves every day in exactly one table.
+   * Totals are kept per raw app; hiding and merging still apply at query time, as for sessions.
+   */
+  compact(beforeDay: string): CompactResult {
+    const days = this.db.prepare('SELECT DISTINCT day FROM sessions WHERE day < ? ORDER BY day').all(beforeDay) as { day: string }[]
+    const rawDay = this.db.prepare('SELECT app_id, start_ts, end_ts, is_idle FROM sessions WHERE day = ? ORDER BY start_ts')
+    const upsert = this.db.prepare(
+      `INSERT INTO daily_totals (day, app_id, active, passive, idle, sessions, longest) VALUES (?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT(day, app_id) DO UPDATE SET active = active + excluded.active, passive = passive + excluded.passive,
+         idle = idle + excluded.idle, sessions = sessions + excluded.sessions, longest = MAX(longest, excluded.longest)`
+    )
+    const delSessions = this.db.prepare('DELETE FROM sessions WHERE day = ?')
+    const putSummary = this.db.prepare(
+      `INSERT OR REPLACE INTO daily_summary (day, sessions, longest, longest_start, longest_end, switches, first_activity, last_activity)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    )
+    let sessions = 0
+    const moveDay = this.db.transaction((day: string) => {
+      // Device-level figures the way daySummary() computes them from visible, merge-resolved sessions.
+      const visible = this.daySessions(day)
+      const stretches = activeStretches(visible)
+      let longest: Stretch | null = null
+      for (const s of stretches) if (!longest || s.end - s.start > longest.end - longest.start) longest = s
+      let switches = 0
+      for (const t of transitions(visible).values()) switches += t.count
+      let first: number | null = null
+      let last: number | null = null
+      for (const r of visible) {
+        if (r.is_idle === 1) continue
+        if (first === null) first = r.start_ts
+        last = r.end_ts
+      }
+      putSummary.run(day, stretches.length, longest ? longest.end - longest.start : 0, longest?.start ?? null, longest?.end ?? null, switches, first, last)
+
+      const rows = rawDay.all(day) as { app_id: number; start_ts: number; end_ts: number; is_idle: number }[]
+      const byApp = new Map<number, { active: number; passive: number; idle: number; sessions: number; longest: number; cur: Stretch | null }>()
+      for (const r of rows) {
+        let u = byApp.get(r.app_id)
+        if (!u) {
+          u = { active: 0, passive: 0, idle: 0, sessions: 0, longest: 0, cur: null }
+          byApp.set(r.app_id, u)
+        }
+        const dur = r.end_ts - r.start_ts
+        if (r.is_idle === 1) {
+          u.idle += dur
+          if (u.cur) {
+            u.longest = Math.max(u.longest, u.cur.end - u.cur.start)
+            u.cur = null
+          }
+          continue
+        }
+        u.active += dur
+        if (r.is_idle === 2) u.passive += dur
+        if (u.cur && r.start_ts - u.cur.end <= GAP_MS) u.cur.end = r.end_ts
+        else {
+          if (u.cur) u.longest = Math.max(u.longest, u.cur.end - u.cur.start)
+          u.cur = { start: r.start_ts, end: r.end_ts }
+          u.sessions++
+        }
+      }
+      for (const [appId, u] of byApp) {
+        if (u.cur) u.longest = Math.max(u.longest, u.cur.end - u.cur.start)
+        upsert.run(day, appId, u.active, u.passive, u.idle, u.sessions, u.longest)
+      }
+      sessions += delSessions.run(day).changes
+    })
+    for (const d of days) moveDay(d.day)
+
+    if (sessions > 0) {
+      // Give the space back to the file system, at most once a week; the WAL checkpoint keeps the -wal file small.
+      this.db.pragma('wal_checkpoint(TRUNCATE)')
+      const last = Number(this.getMeta('lastVacuum') ?? 0)
+      if (Date.now() - last > 7 * 86_400_000) {
+        this.db.exec('VACUUM')
+        this.setMeta('lastVacuum', String(Date.now()))
+      }
+    }
+    return { days: days.length, sessions }
   }
 }

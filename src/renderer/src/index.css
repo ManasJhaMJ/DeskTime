@@ -184,8 +184,18 @@ html.radius-soft {
 }
 
 /* font */
-html.font-system {
-  --font-sans: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+/* Bundled fonts (offline). System default is Segoe UI Variable, the Windows 11 font. */
+html.font-comic {
+  --font-sans: 'Comic Neue', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+}
+html.font-saira {
+  --font-sans: 'Saira Variable', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+}
+html.font-roboto {
+  --font-sans: 'Roboto Variable', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+}
+html.font-caveat {
+  --font-sans: 'Caveat Variable', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
 }
 
 /* Tailwind utilities read the tokens, so `bg-card`, `text-secondary`, `border-border` follow the mode. */
@@ -207,7 +217,7 @@ html.font-system {
   --radius-card: var(--radius-card);
 }
 :root {
-  --font-sans: 'Manrope Variable', 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
+  --font-sans: 'Segoe UI Variable Text', 'Segoe UI', system-ui, sans-serif;
   --radius-card: 14px;
   --radius-ctl: 10px;
 }
@@ -230,6 +240,12 @@ body,
 /* Subtle depth: a faint accent wash top-left over the base, nothing else. */
 body {
   background: radial-gradient(900px 520px at 8% -10%, var(--bg-tint), transparent 60%), var(--bg);
+}
+
+/* Windows paints the minimize/maximize/close overlay in the solid theme background; the bar it sits in must be the
+   same flat color in every mode (no tint, no glass) or the overlay shows as a box. */
+.topbar {
+  background: var(--bg);
 }
 
 ::selection {
@@ -470,4 +486,50 @@ html.motion-reduced .dot-live::after,
 html.motion-reduced .seg-in,
 html.motion-reduced .bar-in {
   animation: none !important;
+}
+
+/* ---- color picker sliders ------------------------------------------------- */
+input[type='range'].color-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border-2);
+  outline: none;
+}
+input[type='range'].color-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  border: 2px solid var(--primary);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+}
+
+/* ---- Windows glass (Mica / Acrylic) ----------------------------------------
+   The main process sets backgroundMaterial on the window and passes material=1; the page must then let the
+   system backdrop show through: transparent body, translucent chrome and cards. */
+html.material,
+html.material body {
+  background: transparent;
+}
+html.material .sidebar {
+  background: color-mix(in srgb, var(--bg) 35%, transparent);
+}
+html.material .card {
+  background: color-mix(in srgb, var(--card) 78%, transparent);
+}
+/* With the GPU on, a real blur behind cards is affordable and reads better on busy wallpapers. */
+html.material.gpu .card {
+  backdrop-filter: blur(18px) saturate(1.3);
+  -webkit-backdrop-filter: blur(18px) saturate(1.3);
+}
+html.material input[type='text'],
+html.material input[type='number'],
+html.material input[type='time'],
+html.material select {
+  background: color-mix(in srgb, var(--card) 85%, transparent);
 }

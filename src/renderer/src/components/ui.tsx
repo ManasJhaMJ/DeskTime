@@ -27,7 +27,7 @@ export function Card({
       {children}
     </>
   )
-  const cls = `card ${padded ? 'p-5' : ''} ${className}`
+  const cls = `card ${padded ? 'p-5' : 'overflow-hidden'} ${className}`
   if (STATIC) return <section className={cls}>{inner}</section>
   return (
     <motion.section variants={riseVariants} className={cls}>
@@ -225,14 +225,16 @@ export function Toggle({
       aria-checked={checked}
       disabled={disabled}
       onClick={() => onChange(!checked)}
-      className="relative w-10 h-[22px] rounded-full transition-colors duration-200"
+      // A fixed 40x22 box that never shrinks inside flex rows; the knob moves by transform, so it always stays on the track.
+      className="inline-flex shrink-0 items-center w-10 min-w-10 h-[22px] p-0 border-0 rounded-full transition-colors duration-200 disabled:opacity-50"
       style={{ background: checked ? 'var(--accent)' : 'var(--border-2)' }}
     >
-      <motion.span
-        className="absolute top-[3px] w-4 h-4 rounded-full bg-white shadow"
-        initial={false}
-        animate={{ left: checked ? 21 : 3 }}
-        transition={STATIC ? { duration: 0 } : { type: 'spring', stiffness: 500, damping: 30 }}
+      <span
+        className="block w-4 h-4 rounded-full bg-white shadow"
+        style={{
+          transform: `translateX(${checked ? 21 : 3}px)`,
+          transition: STATIC ? 'none' : 'transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1)'
+        }}
       />
     </button>
   )

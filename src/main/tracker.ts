@@ -11,13 +11,11 @@ import { existsSync, readdirSync } from 'fs'
 import { basename, dirname, extname, join } from 'path'
 import { DB, dayStart, toDay } from './db'
 import {
-  cleanTitle,
   friendlyName,
   getForeground,
   isDisplayRequired,
   isKnownFriendly,
   SYSTEM_PROCESSES,
-  windowTitle,
   type ForegroundInfo
 } from './win32'
 import { appInCall, devicesInUse } from './consent'
@@ -35,14 +33,6 @@ export interface TickInfo {
 
 type Kind = 0 | 1 | 2
 type State = 'active' | 'passive' | 'idle' | 'media' | 'call' | 'screen-off'
-
-interface LiveContext {
-  id: number
-  appId: number
-  title: string
-  start: number
-  end: number
-}
 
 interface Live {
   id: number
@@ -63,7 +53,6 @@ const DEBOUNCE_MS = 2000
 /** How long to keep attributing time to the previous app while a non-real window (broker, splash) is in front. */
 const UNREAL_GRACE_MS = 15_000
 /** A window title must persist this long before it is recorded (skips tab-cycling and loading titles). */
-const TITLE_DEBOUNCE_MS = 3000
 
 export class Tracker extends EventEmitter {
   private timer: NodeJS.Timeout | null = null
@@ -76,8 +65,6 @@ export class Tracker extends EventEmitter {
   private locked = false
   private state: State = 'active'
   private idleSince: number | null = null
-  private ctx: LiveContext | null = null
-  private pendingTitle: { title: string; since: number } | null = null
   private currentApp: AppInfo | null = null
   private currentRawId: number | null = null
   private pending: { rawId: number; app: AppInfo; since: number } | null = null
@@ -155,7 +142,6 @@ export class Tracker extends EventEmitter {
   /** Writes the in-memory end timestamp of the live session to the database. */
   flush(): void {
     if (this.live) this.db.updateSessionEnd(this.live.id, this.live.end)
-    if (this.ctx) this.db.updateContextEnd(this.ctx.id, this.ctx.end)
     this.lastFlush = Date.now()
   }
 
@@ -225,51 +211,12 @@ export class Tracker extends EventEmitter {
     if (this.live.end - this.live.start < 300) this.db.deleteSession(this.live.id)
     else this.db.updateSessionEnd(this.live.id, this.live.end)
     this.live = null
-    this.closeContext(end)
   }
 
   private openLive(appId: number, kind: Kind, start: number): void {
     const day = toDay(start)
     const id = this.db.insertSession(appId, start, start, kind, day)
     this.live = { id, appId, kind, start, end: start, day }
-  }
-
-  private closeContext(end: number): void {
-    if (!this.ctx) return
-    this.ctx.end = Math.max(this.ctx.start, end)
-    this.db.updateContextEnd(this.ctx.id, this.ctx.end)
-    this.ctx = null
-    this.pendingTitle = null
-  }
-
-  /** Opt-in title tracking: one context row per stable title inside the current app. */
-  private trackTitle(fg: ForegroundInfo | null, rawId: number, away: boolean, now: number): void {
-    if (!fg || away) {
-      if (away) this.closeContext(now)
-      return
-    }
-    const app = this.currentApp
-    const title = cleanTitle(windowTitle(fg.hwnd), app?.displayName ?? '')
-    if (!title) return
-    if (this.ctx && this.ctx.appId === rawId && this.ctx.title === title) {
-      this.ctx.end = now
-      this.pendingTitle = null
-      return
-    }
-    if (!this.pendingTitle || this.pendingTitle.title !== title) {
-      this.pendingTitle = { title, since: now }
-      if (this.ctx) this.ctx.end = now
-      return
-    }
-    if (now - this.pendingTitle.since < TITLE_DEBOUNCE_MS) {
-      if (this.ctx) this.ctx.end = now
-      return
-    }
-    const start = this.pendingTitle.since
-    this.closeContext(start)
-    const id = this.db.insertContext(rawId, title, start, now)
-    this.ctx = { id, appId: rawId, title, start, end: now }
-    this.pendingTitle = null
   }
 
   private tick(): void {
@@ -310,8 +257,7 @@ export class Tracker extends EventEmitter {
               pid: fg.pid,
               packageFamily: fg.packageFamily,
               isRealWindow: fg.isRealWindow,
-              fullscreen: fg.fullscreen,
-              title: settings.trackWindowTitles ? cleanTitle(windowTitle(fg.hwnd), this.currentApp?.displayName ?? '') : null
+              fullscreen: fg.fullscreen
             }
           : null
       }
@@ -449,9 +395,6 @@ export class Tracker extends EventEmitter {
       }
       if (!this.live) this.openLive(rawId, kind, Math.max(this.sinceTs, boundary))
       else this.live.end = now
-
-      if (settings.trackWindowTitles) this.trackTitle(fg, rawId, kind === 1, now)
-      else if (this.ctx) this.closeContext(now)
 
       if (now - this.lastFlush >= FLUSH_MS) this.flush()
 

@@ -42,19 +42,29 @@ export function fmtHour(hour: number): string {
   return h < 12 ? `${h} AM` : `${h - 12} PM`
 }
 
+/** Mirrors the main process: hours before this belong to the previous day. Set from settings by App. */
+let dayStartHour = 0
+export function setDayStartHour(hour: number): void {
+  dayStartHour = Math.max(0, Math.min(23, Math.round(hour)))
+}
+export const getDayStartHour = (): number => dayStartHour
+
 export function toDay(ts: number): string {
   const d = new Date(ts)
+  if (d.getHours() < dayStartHour) d.setDate(d.getDate() - 1)
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
 }
 
 export function dayStart(day: string): number {
   const [y, m, d] = day.split('-').map(Number)
-  return new Date(y, m - 1, d).getTime()
+  return new Date(y, m - 1, d, dayStartHour).getTime()
 }
 
+/** Calendar arithmetic on day labels. Built at noon so the day-start shift in toDay() cannot move it. */
 export function addDays(day: string, n: number): string {
   const [y, m, d] = day.split('-').map(Number)
-  return toDay(new Date(y, m - 1, d + n).getTime())
+  const x = new Date(y, m - 1, d + n, 12)
+  return `${x.getFullYear()}-${pad(x.getMonth() + 1)}-${pad(x.getDate())}`
 }
 
 export const today = (): string => toDay(Date.now())

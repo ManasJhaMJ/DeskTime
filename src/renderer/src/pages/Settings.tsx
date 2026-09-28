@@ -1,15 +1,31 @@
-import { Fragment, useEffect, useState } from 'react'
-import type { Appearance, Diagnostics, LoginStatus, Settings as SettingsT, TrackerStatus } from '../../../shared/types'
+import { Fragment, useEffect, useRef, useState } from 'react'
+import { motion } from 'framer-motion'
+import { ImagePlus } from 'lucide-react'
+import { BotAvatar } from 'bot-avatars'
+import type { Appearance, CompactResult, Diagnostics, LoginStatus, Settings as SettingsT, TrackerStatus, UpdateStatus } from '../../../shared/types'
+import { AVATAR_BOTS, DAY_START_OPTIONS, FONT_OPTIONS, RETENTION_OPTIONS } from '../../../shared/types'
 import { ACCENT_PRESETS, DARK_BASES, LIGHT_BASES, accentForMode, applyAppearance } from '@/lib/theme'
-import { fmtTime } from '@/lib/format'
-import { usePoll } from '@/lib/hooks'
+import { fmtTime, setDayStartHour } from '@/lib/format'
+import { useEvent, usePoll } from '@/lib/hooks'
 import { fmtDayShort } from '@/lib/format'
 import { Card, Page, PageHeader, Row, Segmented, Toggle } from '@/components/ui'
+import { ColorPicker } from '@/components/ColorPicker'
 
 export function Settings({ status }: { status: TrackerStatus | null }): JSX.Element {
   const [s, setS] = useState<SettingsT | null>(null)
   const [version, setVersion] = useState('')
   const info = usePoll(() => window.api.dataInfo(), [], 30_000)
+  const [compacting, setCompacting] = useState(false)
+  const [compacted, setCompacted] = useState<CompactResult | null>(null)
+  const compactNow = async (): Promise<void> => {
+    setCompacting(true)
+    try {
+      setCompacted(await window.api.compactData())
+      info.refresh()
+    } finally {
+      setCompacting(false)
+    }
+  }
   const [login, setLogin] = useState<LoginStatus | null>(null)
   const refreshLogin = (): void => {
     void window.api.loginStatus().then(setLogin)
@@ -25,7 +41,9 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
     if (!s) return
     const next = { ...s, ...p }
     setS(next)
-    setS(await window.api.setSettings(next))
+    const saved = await window.api.setSettings(next)
+    setDayStartHour(saved.dayStartHour)
+    setS(saved)
     if ('launchAtStartup' in p) setTimeout(refreshLogin, 300)
   }
 
@@ -33,7 +51,7 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
 
   return (
     <Page>
-      <PageHeader title="Settings" subtitle="Everything stays on this PC. No account, no cloud, no internet required." />
+      <PageHeader title="Settings" subtitle="Everything stays on this PC. No account, no cloud. The only network call is an optional update check." />
 
       <Card title="Tracking" className="mb-3">
         <Row label="Idle after" hint="Time without keyboard or mouse input before you count as idle.">
@@ -47,6 +65,12 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
             value={s.idleThresholdSec}
             onChange={(v) => patch({ idleThresholdSec: v })}
           />
+        </Row>
+        <Row
+          label="Day starts at"
+          hint="Anything you do before this hour counts toward the previous day, so a late night stays on the evening it belongs to. Changing it re-files what has been recorded so far."
+        >
+          <Segmented options={DAY_START_OPTIONS} value={s.dayStartHour} onChange={(v) => patch({ dayStartHour: v })} />
         </Row>
         <Row label="Tracking" hint={status?.paused ? 'Paused. Nothing is being recorded.' : 'Foreground application and idle state, once per second.'}>
           {status?.paused ? (
@@ -85,17 +109,6 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
         <Row label="Count media as active" hint="Watching a video or a fullscreen app with no keyboard or mouse input still counts as active time.">
           <Toggle checked={s.mediaCountsActive} onChange={(v) => patch({ mediaCountsActive: v })} />
         </Row>
-        <Row
-          label="Record window titles"
-          hint="Off by default. When on, DeskTime stores the title of the active window (browser tab, document, project) so you can see what you did inside an app. Titles never leave this PC."
-        >
-          {s.trackWindowTitles && (
-            <button className="btn btn-ghost text-[12.5px]" onClick={() => window.api.clearContexts()}>
-              Delete titles
-            </button>
-          )}
-          <Toggle checked={s.trackWindowTitles} onChange={(v) => patch({ trackWindowTitles: v })} />
-        </Row>
         <Row label="Show screen time in tray" hint="Today's total appears in the tray tooltip and menu.">
           <Toggle checked={s.showTrayScreenTime} onChange={(v) => patch({ showTrayScreenTime: v })} />
         </Row>
@@ -120,7 +133,7 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
       </Card>
 
       <Card title="Notifications and breaks" className="mb-3">
-        <Row label="Notifications" hint="Limits, focus interruptions and break reminders.">
+        <Row label="Notifications" hint="Master switch for every Windows notification the app sends: limits, focus, breaks, digests, streak reminders and update notices.">
           <Toggle checked={s.notificationsEnabled} onChange={(v) => patch({ notificationsEnabled: v })} />
         </Row>
         <Row label="Break reminders" hint="Remind me after a long stretch of continuous activity.">
@@ -143,6 +156,16 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
           />
           <Toggle checked={s.dailyDigestEnabled} onChange={(v) => patch({ dailyDigestEnabled: v })} />
         </Row>
+        <Row label="Streak reminder" hint="Once a day at this time, if a streak is not met yet or is within 15% of its limit.">
+          <input
+            type="time"
+            value={s.streakReminderTime}
+            onChange={(e) => e.target.value && patch({ streakReminderTime: e.target.value })}
+            className="!py-1.5 num"
+            disabled={!s.streakRemindersEnabled}
+          />
+          <Toggle checked={s.streakRemindersEnabled} onChange={(v) => patch({ streakRemindersEnabled: v })} />
+        </Row>
         <Row label="Weekly digest" hint="Monday morning: last week's total, daily average and the change from the week before.">
           <Toggle checked={s.weeklyDigestEnabled} onChange={(v) => patch({ weeklyDigestEnabled: v })} />
         </Row>
@@ -156,6 +179,7 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
       </Card>
 
       <AppearanceCard s={s} patch={patch} />
+      <CompanionCard s={s} patch={patch} />
 
       <Card title="Performance" className="mb-3">
         <Row label="Hardware acceleration" hint="Off by default to keep memory and GPU use low (about 110 MB resident instead of 190 MB). Turn on for smoother animations. Takes effect after restarting the app.">
@@ -180,7 +204,9 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
           label="Local database"
           hint={
             info.data
-              ? `${info.data.sessions.toLocaleString()} sessions across ${info.data.apps} apps${info.data.firstDay ? ` since ${fmtDayShort(info.data.firstDay)}` : ''}`
+              ? `${info.data.sessions.toLocaleString()} sessions across ${info.data.apps} apps${info.data.firstDay ? ` since ${fmtDayShort(info.data.firstDay)}` : ''} · ${fmtBytes(info.data.bytes)}${
+                  info.data.compactedDays ? ` · ${info.data.compactedDays} older ${info.data.compactedDays === 1 ? 'day' : 'days'} kept as daily totals` : ''
+                }`
               : 'SQLite file in your user profile'
           }
         >
@@ -191,6 +217,22 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
             Export JSON
           </button>
         </Row>
+        <Row
+          label="Keep full detail for"
+          hint="Older days are folded into per-app daily totals, so reports, averages and categories keep working while the database stays small and fast. Minute-by-minute timelines for those days are removed. Runs a few times a day, or right away with Compact."
+        >
+          <Segmented options={RETENTION_OPTIONS} value={s.retentionMonths} onChange={(v) => patch({ retentionMonths: v })} />
+          <button className="btn" disabled={s.retentionMonths === 0 || compacting} onClick={() => void compactNow()} title="Fold days outside the window now">
+            {compacting ? 'Compacting…' : 'Compact'}
+          </button>
+        </Row>
+        {compacted && (
+          <div className="text-[12.5px] text-secondary py-2">
+            {compacted.days > 0
+              ? `Folded ${compacted.days} ${compacted.days === 1 ? 'day' : 'days'} into daily totals (${compacted.sessions.toLocaleString()} sessions).`
+              : 'Nothing is older than the retention window yet.'}
+          </div>
+        )}
         <Row label="Delete usage data" hint="Removes all recorded sessions and focus history. Settings and limits stay.">
           <button className="btn btn-danger" onClick={() => window.api.clearData().then((ok) => ok && info.refresh())}>
             Delete
@@ -209,8 +251,151 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
             Quit app
           </button>
         </Row>
+        <UpdateRows s={s} patch={patch} />
       </Card>
     </Page>
+  )
+}
+
+/** Shrinks a picked image to a small square data URL so it stores comfortably in settings. */
+async function photoToDataUrl(file: File, size = 128): Promise<string> {
+  const bitmap = await createImageBitmap(file)
+  const canvas = document.createElement('canvas')
+  canvas.width = size
+  canvas.height = size
+  const ctx = canvas.getContext('2d')!
+  const side = Math.min(bitmap.width, bitmap.height)
+  ctx.drawImage(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side, 0, 0, size, size)
+  bitmap.close()
+  return canvas.toDataURL('image/png')
+}
+
+/** Companion picker: one round button per bot, the user's picture, or off; plus when it sleeps. */
+function CompanionCard({ s, patch }: { s: SettingsT; patch: (p: Partial<SettingsT>) => Promise<void> }): JSX.Element {
+  const fileRef = useRef<HTMLInputElement>(null)
+  const spring = { type: 'spring' as const, stiffness: 420, damping: 34 }
+  const onPhotoButton = (): void => {
+    if (!s.avatarPhoto || s.avatar === 'photo') fileRef.current?.click()
+    else void patch({ avatar: 'photo' })
+  }
+  const onFile = async (e: React.ChangeEvent<HTMLInputElement>): Promise<void> => {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    try {
+      await patch({ avatar: 'photo', avatarPhoto: await photoToDataUrl(file) })
+    } catch (err) {
+      void window.api.reportError(`avatar photo: ${String(err)}`)
+    }
+  }
+  const highlight = <motion.span layoutId="avatar-choice" transition={spring} className="absolute inset-0 rounded-full" style={{ background: 'var(--control)', boxShadow: '0 0 0 1px var(--border-2)' }} />
+  return (
+    <Card title="Companion" className="mb-3">
+      <Row label="Avatar" hint="A small character on the Overview that reacts to your day: it hops when you switch apps and dozes off at night. Pick one, use your own picture, or turn it off.">
+        <div className="flex items-center gap-0.5">
+          {AVATAR_BOTS.map((bot) => (
+            <button
+              key={bot}
+              type="button"
+              aria-label={bot}
+              aria-pressed={s.avatar === bot}
+              onClick={() => patch({ avatar: bot })}
+              className="relative grid h-[32px] w-[32px] place-items-center rounded-full"
+            >
+              {s.avatar === bot && highlight}
+              <span className={`relative transition-opacity ${s.avatar === bot ? '' : 'opacity-55 hover:opacity-100'}`}>
+                <BotAvatar type={bot} size={22} interactive={false} paused={s.avatar !== bot} />
+              </span>
+            </button>
+          ))}
+          <button type="button" aria-label="Your picture" aria-pressed={s.avatar === 'photo'} onClick={onPhotoButton} className="relative grid h-[32px] w-[32px] place-items-center rounded-full" title={s.avatarPhoto ? 'Click again to choose another picture' : 'Choose a picture'}>
+            {s.avatar === 'photo' && highlight}
+            {s.avatarPhoto ? (
+              <img src={s.avatarPhoto} alt="" className="relative h-[22px] w-[22px] rounded-full object-cover" />
+            ) : (
+              <ImagePlus size={15} className="relative text-secondary" />
+            )}
+          </button>
+          <button type="button" aria-pressed={s.avatar === 'none'} onClick={() => patch({ avatar: 'none' })} className="relative grid h-[32px] px-2.5 place-items-center rounded-full text-[12.5px] text-secondary">
+            {s.avatar === 'none' && highlight}
+            <span className="relative">Off</span>
+          </button>
+          <input ref={fileRef} type="file" accept=".png,.jpg,.jpeg,.gif,.webp" className="hidden" onChange={(e) => void onFile(e)} />
+        </div>
+      </Row>
+      <Row label="Sleeps" hint="When the companion dozes off.">
+        <Segmented
+          options={[
+            { value: 'time', label: '23:00 – 06:00' },
+            { value: 'idle', label: 'When idle' },
+            { value: 'never', label: 'Never' }
+          ]}
+          value={s.avatarSleeps}
+          onChange={(v) => patch({ avatarSleeps: v })}
+        />
+      </Row>
+    </Card>
+  )
+}
+
+function fmtBytes(b: number): string {
+  if (b < 1_048_576) return `${Math.max(1, Math.round(b / 1024))} KB`
+  return `${(b / 1_048_576).toFixed(1)} MB`
+}
+
+/** Update check toggle plus the current updater state with the matching action. */
+function UpdateRows({ s, patch }: { s: SettingsT; patch: (p: Partial<SettingsT>) => Promise<void> }): JSX.Element {
+  const [u, setU] = useState<UpdateStatus | null>(null)
+  useEffect(() => {
+    void window.api.updateStatus().then(setU)
+  }, [])
+  useEvent<UpdateStatus>('update:status', setU)
+
+  const text = !u
+    ? ''
+    : u.state === 'disabled'
+      ? (u.reason ?? 'Automatic checks are off.')
+      : u.state === 'checking'
+        ? 'Checking GitHub Releases…'
+        : u.state === 'available'
+          ? `DeskTime ${u.version} is available.`
+          : u.state === 'downloading'
+            ? `Downloading ${u.version}… ${u.percent}%`
+            : u.state === 'downloaded'
+              ? `DeskTime ${u.version} is downloaded. It installs when the app restarts.`
+              : u.state === 'error'
+                ? `Last check failed: ${u.error ?? 'unknown error'}`
+                : u.state === 'not-available'
+                  ? `You are on the latest version${u.checkedAt ? `. Checked ${fmtTime(u.checkedAt)}` : ''}.`
+                  : 'Checks at startup and every six hours.'
+  const busy = u?.state === 'checking' || u?.state === 'downloading'
+
+  return (
+    <>
+      <Row
+        label="Check for updates automatically"
+        hint="The only network request DeskTime makes: it asks GitHub Releases for the newest version number at startup and every six hours. Nothing about you or your usage is sent. Downloads only start when you ask."
+      >
+        <Toggle checked={s.autoUpdateCheck} onChange={(v) => patch({ autoUpdateCheck: v })} />
+      </Row>
+      <Row label="Updates" hint={text}>
+        {u?.state === 'available' && (
+          <button className="btn btn-accent" onClick={() => window.api.downloadUpdate().then(setU)}>
+            Download {u.version}
+          </button>
+        )}
+        {u?.state === 'downloaded' && (
+          <button className="btn btn-accent" onClick={() => window.api.installUpdate()}>
+            Restart to update
+          </button>
+        )}
+        {u && !busy && u.state !== 'downloaded' && (
+          <button className="btn" onClick={() => window.api.checkForUpdates().then(setU)}>
+            Check now
+          </button>
+        )}
+      </Row>
+    </>
   )
 }
 
@@ -229,7 +414,6 @@ function DiagnosticsCard(): JSX.Element {
         ['Process id', d.foreground ? String(d.foreground.pid) : ''],
         ['Package family', d.foreground?.packageFamily ?? 'classic app'],
         ['Real window', d.foreground ? `${yes(d.foreground.isRealWindow)}, fullscreen ${yes(d.foreground.fullscreen)}` : ''],
-        ['Window title', d.foreground?.title ?? (d.foreground ? 'not recorded (titles off)' : '')],
         ['Attributed to', d.currentApp ?? 'nothing'],
         ['Display kept awake', yes(d.displayRequired)],
         ['Mic / camera in use', d.devicesInUse.length ? d.devicesInUse.join(', ') : 'none'],
@@ -279,6 +463,7 @@ function AppearanceCard({ s, patch }: { s: SettingsT; patch: (p: Partial<Setting
   }
   const isPreset = ACCENT_PRESETS.some((p) => p.id === a.accent)
   const customHex = isPreset ? '' : a.accent
+  const [customOpen, setCustomOpen] = useState(false)
 
   const Swatch = ({ color, on, label, hint, onClick }: { color: string; on: boolean; label: string; hint?: string; onClick: () => void }): JSX.Element => (
     <button
@@ -346,19 +531,23 @@ function AppearanceCard({ s, patch }: { s: SettingsT; patch: (p: Partial<Setting
               />
             )
           })}
-          <label
-            className="ml-1 inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[12.5px] cursor-pointer"
-            style={{ borderColor: isPreset ? 'var(--border)' : 'var(--accent)' }}
-          >
-            <span className="w-4 h-4 rounded-full border border-border" style={{ background: customHex ? accentForMode(customHex, dark) : 'conic-gradient(red, yellow, lime, cyan, blue, magenta, red)' }} />
-            Custom
-            <input
-              type="color"
-              value={customHex || (dark ? '#ff7a6b' : '#d9503f')}
-              onChange={(e) => set({ accent: e.target.value })}
-              className="w-0 h-0 opacity-0 absolute"
-            />
-          </label>
+          <div className="relative ml-1">
+            <button
+              type="button"
+              className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg border text-[12.5px]"
+              style={{ borderColor: isPreset ? 'var(--border)' : 'var(--accent)' }}
+              aria-expanded={customOpen}
+              onClick={() => setCustomOpen((v) => !v)}
+            >
+              <span className="w-4 h-4 rounded-full border border-border" style={{ background: customHex ? accentForMode(customHex, dark) : 'conic-gradient(red, yellow, lime, cyan, blue, magenta, red)' }} />
+              Custom
+            </button>
+            {customOpen && (
+              <div className="absolute right-0 top-full mt-2 z-20">
+                <ColorPicker value={customHex || (dark ? '#ff7a6b' : '#d9503f')} onChange={(hex) => set({ accent: hex })} onClose={() => setCustomOpen(false)} />
+              </div>
+            )}
+          </div>
         </div>
       </div>
       <Row label="Corners" hint="Card and control roundness.">
@@ -383,12 +572,9 @@ function AppearanceCard({ s, patch }: { s: SettingsT; patch: (p: Partial<Setting
           onChange={(v) => set({ motion: v })}
         />
       </Row>
-      <Row label="Font" hint="Manrope is bundled and rounded. System uses Segoe UI Variable, the Windows 11 font.">
+      <Row label="Font" hint="System is Segoe UI Variable, the Windows 11 font. The others are bundled and work offline.">
         <Segmented
-          options={[
-            { value: 'manrope', label: 'Manrope' },
-            { value: 'system', label: 'System' }
-          ]}
+          options={FONT_OPTIONS}
           value={a.font}
           onChange={(v) => set({ font: v })}
         />

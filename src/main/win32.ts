@@ -20,7 +20,6 @@ const IsZoomed = user32.func('int __stdcall IsZoomed(void* hWnd)')
 const GetWindowTextLengthW = user32.func('int __stdcall GetWindowTextLengthW(void* hWnd)')
 const GetWindowLongPtrW = user32.func('intptr_t __stdcall GetWindowLongPtrW(void* hWnd, int nIndex)')
 const GetWindowRect = user32.func('int __stdcall GetWindowRect(void* hWnd, _Out_ RECT* lpRect)')
-const GetWindowTextW = user32.func('int __stdcall GetWindowTextW(void* hWnd, _Out_ char16_t* lpString, int nMaxCount)')
 const MonitorFromWindow = user32.func('void* __stdcall MonitorFromWindow(void* hwnd, uint32_t dwFlags)')
 const GetMonitorInfoW = user32.func('int __stdcall GetMonitorInfoW(void* hMonitor, _Inout_ MONITORINFO* lpmi)')
 // SystemExecutionState: which ES_* requests are currently active system-wide (video players and browsers
@@ -52,7 +51,6 @@ const WS_CAPTION = 0x00c00000
 const MONITOR_DEFAULTTONEAREST = 2
 const SYSTEM_EXECUTION_STATE = 16
 const ES_DISPLAY_REQUIRED = 0x2
-const titleBuf = Buffer.alloc(2 * 512)
 const WS_EX_TOOLWINDOW = 0x00000080
 const WS_EX_NOACTIVATE = 0x08000000
 
@@ -131,15 +129,6 @@ export function isDisplayRequired(): boolean {
   }
 }
 
-/** Current title of a window (only called when the user opted into title tracking). */
-export function windowTitle(hwnd: unknown): string {
-  try {
-    const n = GetWindowTextW(hwnd, titleBuf, 512)
-    return n > 0 ? titleBuf.toString('utf16le', 0, n * 2) : ''
-  } catch {
-    return ''
-  }
-}
 
 function isRealWindow(hwnd: unknown): boolean {
   try {
@@ -350,19 +339,6 @@ export const DEFAULT_CATEGORIES: { name: string; color: string; exes: string[] }
   { name: 'Tools', color: '#c98500', exes: ['explorer.exe', 'taskmgr.exe', 'systemsettings.exe', 'notepad.exe', 'snippingtool.exe'] }
 ]
 
-/** Strip the trailing app name browsers and editors append to their titles ("Docs - Brave", "index.ts - Visual Studio Code"). */
-export function cleanTitle(title: string, appName: string): string {
-  let t = title.trim()
-  const suffixes = [appName, 'Google Chrome', 'Microsoft Edge', 'Mozilla Firefox', 'Brave', 'Opera', 'Visual Studio Code',
-    'Visual Studio', 'Personal - Microsoft​ Edge', 'and \d+ more pages? - Personal - Microsoft Edge']
-  for (const s of suffixes) {
-    const re = new RegExp(`\\s+[-—–|·]\\s+${s}$`, 'i')
-    t = t.replace(re, '')
-  }
-  t = t.replace(/^\(\d+\)\s+/, '') // notification counters like "(3) WhatsApp"
-  t = t.replace(/^[●•*]\s+/, '') // unsaved-changes markers
-  return t.slice(0, 200)
-}
 
 export function friendlyName(exeName: string): string {
   const key = exeName.toLowerCase()

@@ -1,10 +1,11 @@
 // Focus mode, app limits and break reminders. Reacts to tracker ticks; does no polling of its own.
 import { addDays, DB, toDay } from './db'
+import { describeStreak, evaluateStreak, fmtMinutes, isUnderKind } from './streaks'
 import { Tracker, type TickInfo } from './tracker'
 import { minimizeWindow } from './win32'
-import type { AppLimit, FocusSession, LimitMode, Settings } from '../shared/types'
+import type { AppLimit, FocusSession, LimitMode, Page, Settings } from '../shared/types'
 
-type Notify = (title: string, body: string, page?: 'reports' | 'overview') => void
+type Notify = (title: string, body: string, page?: Page) => void
 
 const REMIND_EVERY_MS = 15 * 60_000
 const BLOCK_NOTIFY_EVERY_MS = 60_000
@@ -212,12 +213,48 @@ export class Guardian {
     }
   }
 
+  private lastStreakCheck = 0
+
+  /**
+   * Once a day at the reminder time: nudge about every streak that is not yet met ("at least" goals) or is within
+   * 15% of its limit ("under" goals). Streaks already done or already broken today stay quiet.
+   */
+  private tickStreaks(now: number): void {
+    if (now - this.lastStreakCheck < 30_000) return
+    this.lastStreakCheck = now
+    const s = this.getSettings()
+    if (!s.streakRemindersEnabled) return
+    const d = new Date(now)
+    const [hh, mm] = s.streakReminderTime.split(':').map(Number)
+    if (d.getHours() * 60 + d.getMinutes() < (hh || 0) * 60 + (mm || 0)) return
+    const day = toDay(now)
+    if (this.db.getMeta('streak:remind') === day) return
+    this.db.setMeta('streak:remind', day)
+
+    const from = addDays(day, -2)
+    const first = this.db.sizeInfo().firstDay
+    const lines: string[] = []
+    for (const streak of this.db.listStreaks()) {
+      const status = evaluateStreak(streak, this.db.streakMinutes(streak, from, day), this.db.frozenDays(streak.id, from, day), first, from, day)
+      const todayMin = status.days[status.days.length - 1]?.value ?? 0
+      if (isUnderKind(streak.kind)) {
+        if (status.todayState !== 'pending' || todayMin < streak.target * 0.85) continue
+        lines.push(`${describeStreak(streak)}: ${fmtMinutes(streak.target - todayMin)} left today`)
+      } else {
+        if (status.todayState !== 'pending') continue
+        lines.push(`${describeStreak(streak)}: ${fmtMinutes(streak.target - todayMin)} to go`)
+      }
+    }
+    if (lines.length) this.notify(lines.length === 1 ? 'Streak at risk' : `${lines.length} streaks at risk`, lines.join(' · '), 'streaks')
+  }
+
   private onTick(t: TickInfo): void {
     try {
       this.tickFocus(t)
       this.tickLimits(t)
       this.tickBreaks(t)
       this.tickDigests(t.now)
+      this.tickStreaks(t.now)
     } catch (err) {
       console.error('[guardian] tick failed', err)
     }

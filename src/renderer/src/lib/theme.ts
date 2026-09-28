@@ -78,6 +78,16 @@ function withLightness(hex: string, fn: (l: number) => number): string {
   return rgbToHex(...hslToRgb(h, s, fn(l)))
 }
 
+/** Hue, saturation and lightness in 0..1, or null for text that is not a 6-digit hex color. */
+export function hexToHsl(hex: string): [number, number, number] | null {
+  const rgb = hexToRgb(hex)
+  return rgb ? rgbToHsl(...rgb) : null
+}
+
+export function hslToHex(h: number, s: number, l: number): string {
+  return rgbToHex(...hslToRgb(h, s, l))
+}
+
 /** Keeps a custom accent readable: not too light on white, not too dark on the dark surfaces. */
 export function accentForMode(hex: string, dark: boolean): string {
   return withLightness(hex, (l) => (dark ? Math.max(l, 0.58) : Math.min(l, 0.46)))
@@ -118,6 +128,6 @@ export function appearanceFromParams(p: URLSearchParams): Appearance | null {
     accent: p.get('ac') ?? 'coral',
     radius: (p.get('rd') as Appearance['radius']) ?? 'rounded',
     motion: (p.get('mo') as Appearance['motion']) ?? 'full',
-    font: (p.get('ft') as Appearance['font']) ?? 'manrope'
+    font: (p.get('ft') as Appearance['font']) ?? 'system'
   }
 }

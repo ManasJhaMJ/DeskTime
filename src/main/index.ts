@@ -3,12 +3,15 @@ import { dirname, join } from 'path'
 import { copyFileSync, existsSync, mkdirSync, renameSync } from 'fs'
 import { release } from 'os'
 import { writeFile } from 'fs/promises'
-import { DB, today } from './db'
+import { addDays, DB, setDayStartHour, toDay, today } from './db'
+import { evaluateStreak } from './streaks'
 import { Tracker } from './tracker'
 import { Guardian } from './guardian'
 import { AppTray, resourcePath } from './tray'
 import { initLogging, log } from './logger'
-import type { LimitMode, LoginStatus, Page, Settings } from '../shared/types'
+import { Updater } from './updater'
+import type { CompactResult, LimitMode, LoginStatus, Page, Settings, StreakKind } from '../shared/types'
+import { FREEZES_PER_MONTH } from '../shared/types'
 import { screen } from 'electron'
 
 const APP_ID = 'com.desktime.app'
@@ -16,6 +19,9 @@ const HIDDEN_ARG = '--hidden'
 const START_HIDDEN = process.argv.includes(HIDDEN_ARG)
 // Dev only: DESKTIME_CAPTURE="page:out.png" renders that page offscreen, saves a PNG and quits.
 const CAPTURE = process.env.DESKTIME_CAPTURE
+// Dev only: DESKTIME_USER_DATA=<dir> uses a scratch profile (own database and single-instance lock), so a
+// test launch never touches the installed app's data or gets blocked by its lock.
+if (process.env.DESKTIME_USER_DATA && !app.isPackaged) app.setPath('userData', process.env.DESKTIME_USER_DATA)
 
 // Single instance: a second launch just surfaces the dashboard.
 if (!app.requestSingleInstanceLock()) {
@@ -65,6 +71,7 @@ function main(): void {
     db.setMeta('theme:v2', '1')
   }
   const getSettings = (): Settings => settings
+  setDayStartHour(settings.dayStartHour)
 
   if (!settings.hardwareAcceleration) app.disableHardwareAcceleration()
 
@@ -105,13 +112,23 @@ function main(): void {
       w.webContents.send('theme:changed', { dark: isDark(), appearance: settings.appearance })
       try {
         w.setBackgroundColor(material ? '#00000000' : c.bg)
-        if (w === win) w.setTitleBarOverlay({ color: c.bg, symbolColor: c.symbol, height: 44 })
+        if (w === win) w.setTitleBarOverlay({ color: c.bg, symbolColor: c.symbol, height: overlayHeight() })
       } catch {
         /* popup has no overlay */
       }
     }
   }
   nativeTheme.on('updated', () => applyChrome())
+
+  // Caveat is a handwriting face that sets small at UI sizes; scale the whole window a little while it is selected.
+  const zoomFor = (): number => (settings.appearance.font === 'caveat' ? 1.15 : 1)
+  // The page's title bar follows this overlay height (env(titlebar-area-height)); both scale with the zoom factor; the native controls overlay must follow or it shows a seam.
+  const TITLEBAR_H = 47
+  const overlayHeight = (): number => Math.round(TITLEBAR_H * zoomFor())
+  const applyZoom = (): void => {
+    for (const w of BrowserWindow.getAllWindows()) if (!w.isDestroyed()) w.webContents.setZoomFactor(zoomFor())
+    applyChrome()
+  }
 
   let win: BrowserWindow | null = null
   let tray: AppTray | null = null
@@ -133,6 +150,39 @@ function main(): void {
 
   tracker.on('status', () => send('tracker:status', tracker.getStatus()))
   tracker.on('apps-changed', () => send('apps:changed'))
+
+  const updater = new Updater(
+    () => settings.autoUpdateCheck,
+    (s) => send('update:status', s),
+    (version) => notify('Update available', `DeskTime ${version} is ready to download from Settings > About.`, 'settings')
+  )
+
+  // ---- retention: fold days older than the window into daily totals -------
+  const RETENTION_EVERY_MS = 6 * 3_600_000
+  const retentionCutoff = (): string | null => {
+    if (settings.retentionMonths <= 0) return null
+    const d = new Date()
+    d.setMonth(d.getMonth() - settings.retentionMonths)
+    return toDay(d.getTime())
+  }
+  const runRetention = (): CompactResult => {
+    const cutoff = retentionCutoff()
+    if (!cutoff) return { days: 0, sessions: 0 }
+    const t0 = Date.now()
+    const r = db.compact(cutoff)
+    if (r.days > 0) {
+      log.info(`retention: folded ${r.days} days (${r.sessions} sessions) before ${cutoff} in ${Date.now() - t0} ms`)
+      send('data:changed')
+    }
+    return r
+  }
+  const retentionTick = (): void => {
+    try {
+      runRetention()
+    } catch (err) {
+      log.error('retention failed', err)
+    }
+  }
 
   function createWindow(page?: Page): void {
     if (page) pendingPage = page
@@ -157,7 +207,7 @@ function main(): void {
       title: 'DeskTime',
       icon: resourcePath('icon.ico'),
       titleBarStyle: 'hidden',
-      titleBarOverlay: { color: chrome().bg, symbolColor: chrome().symbol, height: 44 },
+      titleBarOverlay: { color: chrome().bg, symbolColor: chrome().symbol, height: overlayHeight() },
       webPreferences: {
         preload: join(__dirname, '../preload/index.js'),
         contextIsolation: true,
@@ -169,6 +219,7 @@ function main(): void {
     })
     win.once('ready-to-show', () => win?.show())
     win.webContents.on('did-finish-load', () => {
+      win?.webContents.setZoomFactor(zoomFor())
       if (pendingPage) {
         send('navigate', pendingPage)
         pendingPage = null
@@ -312,6 +363,15 @@ function main(): void {
     await new Promise((r) => setTimeout(r, 600))
     w.webContents.send('navigate', page)
     await new Promise((r) => setTimeout(r, 2500))
+    // Dev only: DESKTIME_CAPTURE_JS runs a script in the page (async allowed) and prints its result before the shot.
+    if (process.env.DESKTIME_CAPTURE_JS) {
+      try {
+        console.log('js:', JSON.stringify(await w.webContents.executeJavaScript(process.env.DESKTIME_CAPTURE_JS, true)))
+      } catch (err) {
+        console.log('js error:', String(err))
+      }
+      await new Promise((r) => setTimeout(r, Number(process.env.DESKTIME_CAPTURE_JS_WAIT ?? 1500)))
+    }
 
     const img = await w.webContents.capturePage()
     await writeFile(file, img.toPNG())
@@ -370,14 +430,6 @@ function main(): void {
     db.setAppHidden(id, !!hidden)
     appsChanged()
   })
-  ipcMain.handle('apps:merge', (_e, sourceId: number, targetId: number) => {
-    db.mergeApp(sourceId, targetId)
-    appsChanged()
-  })
-  ipcMain.handle('apps:unmerge', (_e, id: number) => {
-    db.unmergeApp(id)
-    appsChanged()
-  })
   ipcMain.handle('categories:list', () => db.listCategories())
   ipcMain.handle('categories:add', (_e, name: string, color: string) => {
     const c = db.addCategory(String(name), String(color))
@@ -403,14 +455,6 @@ function main(): void {
   ipcMain.handle('summary:categoriesRange', (_e, fromDay: string, toDay: string) => {
     tracker.flush()
     return db.rangeCategories(fromDay, toDay)
-  })
-  ipcMain.handle('contexts:app', (_e, appId: number, day: string, limit?: number) => {
-    tracker.flush()
-    return db.appContexts(appId, day, limit)
-  })
-  ipcMain.handle('contexts:clear', () => {
-    db.clearContexts()
-    send('data:changed')
   })
   ipcMain.handle('window:open', (_e, page?: Page) => {
     popup?.close()
@@ -453,20 +497,68 @@ function main(): void {
     guardian.invalidateLimits()
   })
 
+  ipcMain.handle('streaks:list', () => {
+    tracker.flush()
+    const t = today()
+    const from = addDays(t, -370)
+    const first = db.sizeInfo().firstDay
+    return db.listStreaks().map((s) => evaluateStreak(s, db.streakMinutes(s, from, t), db.frozenDays(s.id, from, t), first, from, t))
+  })
+  ipcMain.handle('streaks:freeze', (_e, id: number, day: string) => {
+    const ok = db.freezeDay(id, day, FREEZES_PER_MONTH)
+    if (ok) send('data:changed')
+    return ok
+  })
+  ipcMain.handle('streaks:unfreeze', (_e, id: number, day: string) => {
+    db.unfreezeDay(id, day)
+    send('data:changed')
+  })
+  ipcMain.handle('streaks:add', (_e, kind: StreakKind, target: number, refId: number | null) => {
+    db.addStreak(kind, target, refId)
+    send('data:changed')
+  })
+  ipcMain.handle('streaks:remove', (_e, id: number) => {
+    db.removeStreak(id)
+    send('data:changed')
+  })
+  ipcMain.handle('activity:year', (_e, fromDay: string, toDay_: string) => {
+    tracker.flush()
+    return db.yearDaily(fromDay, toDay_)
+  })
+
   ipcMain.handle('settings:get', () => settings)
   ipcMain.handle('settings:set', (_e, next: Settings) => {
     const prev = settings
     settings = { ...settings, ...next }
     db.saveSettings(settings)
     if (prev.launchAtStartup !== settings.launchAtStartup) applyLoginItem()
+    if (prev.autoUpdateCheck !== settings.autoUpdateCheck) updater.configure()
+    if (prev.dayStartHour !== settings.dayStartHour) {
+      // The live session and every recorded day key move to the new boundary.
+      tracker.stop()
+      setDayStartHour(settings.dayStartHour)
+      db.reassignDays()
+      tracker.start()
+      send('data:changed')
+    }
     if (prev.theme !== settings.theme) nativeTheme.themeSource = settings.theme
     if (JSON.stringify(prev.appearance) !== JSON.stringify(settings.appearance)) applyChrome()
+    if (prev.appearance.font !== settings.appearance.font) applyZoom()
     tray?.refresh()
     return settings
   })
   ipcMain.handle('settings:loginStatus', () => loginStatus())
 
   ipcMain.handle('data:info', () => ({ ...db.sizeInfo(), path: app.getPath('userData') }))
+  ipcMain.handle('data:compact', () => {
+    tracker.flush()
+    return runRetention()
+  })
+
+  ipcMain.handle('update:status', () => updater.getStatus())
+  ipcMain.handle('update:check', () => updater.check())
+  ipcMain.handle('update:download', () => updater.download())
+  ipcMain.handle('update:install', () => updater.install())
   ipcMain.handle('data:openFolder', () => shell.openPath(app.getPath('userData')))
   ipcMain.handle('data:export', async () => {
     const res = await dialog.showSaveDialog(win!, {
@@ -496,6 +588,15 @@ function main(): void {
     send('data:changed')
     return true
   })
+  // Color picker: sample one pixel of this window's page at CSS coordinates (never anything outside the app).
+  ipcMain.handle('color:sample', async (e, x: number, y: number) => {
+    const wc = e.sender
+    const z = wc.getZoomFactor()
+    const img = await wc.capturePage({ x: Math.max(0, Math.floor(x * z)), y: Math.max(0, Math.floor(y * z)), width: 1, height: 1 })
+    const px = img.toBitmap() // BGRA
+    if (px.length < 4) return null
+    return '#' + [px[2], px[1], px[0]].map((v) => v.toString(16).padStart(2, '0')).join('')
+  })
   ipcMain.handle('app:version', () => app.getVersion())
   ipcMain.handle('log:open', () => shell.openPath(log.dir()))
   ipcMain.handle('log:renderer', (_e, message: string) => log.error(`renderer: ${String(message).slice(0, 2000)}`))
@@ -509,6 +610,7 @@ function main(): void {
     /* keep running in the tray */
   })
   app.on('will-quit', () => {
+    updater.dispose()
     tracker.stop()
     tray?.destroy()
     db.close()
@@ -543,6 +645,11 @@ function main(): void {
     })
     // Keep the registry entry in sync with the setting (path can change after an update).
     if (settings.launchAtStartup) applyLoginItem()
+
+    // Housekeeping off the startup path: fold old days into totals, then repeat a few times a day.
+    setTimeout(retentionTick, 20_000)
+    setInterval(retentionTick, RETENTION_EVERY_MS)
+    updater.configure()
 
     if (CAPTURE && !app.isPackaged) {
       void capturePage(CAPTURE)

@@ -1,15 +1,17 @@
 import { useState } from 'react'
 import { motion } from 'framer-motion'
-import { Check, Eye, EyeOff, Laptop, Lock } from 'lucide-react'
+import { Check, Eye, EyeOff, Laptop, Lock, Sunrise } from 'lucide-react'
 import type { Settings } from '../../../shared/types'
+import { DAY_START_OPTIONS } from '../../../shared/types'
 import { STATIC } from '@/lib/motion'
 import { ACCENT_PRESETS, applyAppearance } from '@/lib/theme'
 import { Segmented, Toggle } from './ui'
+import logo from '../../../../resources/logo.png'
 
 /** First-run screen: says exactly what is and is not recorded, and takes two decisions up front. */
 export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (s: Settings) => void }): JSX.Element {
   const [launch, setLaunch] = useState(settings.launchAtStartup)
-  const [titles, setTitles] = useState(settings.trackWindowTitles)
+  const [dayStart, setDayStart] = useState(settings.dayStartHour)
   const [theme, setTheme] = useState(settings.theme)
   const [accent, setAccent] = useState(settings.appearance.accent)
   const systemDark = document.documentElement.classList.contains('dark')
@@ -23,7 +25,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
     const next = {
       ...settings,
       launchAtStartup: launch,
-      trackWindowTitles: titles,
+      dayStartHour: dayStart,
       theme,
       appearance: { ...settings.appearance, accent },
       onboardingDone: true
@@ -39,9 +41,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
         className="card w-[560px] p-8"
       >
         <div className="flex items-center gap-3">
-          <span className="w-9 h-9 rounded-full grid place-items-center" style={{ background: 'var(--accent)' }}>
-            <span className="w-3 h-3 rounded-full bg-white" />
-          </span>
+          <img src={logo} alt="" className="w-10 h-10 select-none" draggable={false} />
           <div>
             <div className="text-[20px] font-semibold tracking-tight">Welcome to DeskTime</div>
             <div className="text-secondary text-[13px]">How you actually spend your time on this PC, kept on this PC.</div>
@@ -66,7 +66,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
               <EyeOff size={12} /> Never recorded
             </div>
             <ul className="text-[13px] flex flex-col gap-1.5 text-secondary">
-              {['Keystrokes or clipboard', 'Screen content or screenshots', 'Websites or files, unless you turn on titles below', 'Anything sent anywhere: no account, no cloud'].map((t) => (
+              {['Keystrokes or clipboard', 'Screen content or screenshots', 'Websites, files or window titles', 'Anything sent anywhere: no account, no cloud'].map((t) => (
                 <li key={t} className="flex gap-2">
                   <Lock size={14} className="shrink-0 mt-0.5" /> <span>{t}</span>
                 </li>
@@ -129,13 +129,13 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
           </div>
           <div className="flex items-center justify-between gap-4 p-3.5">
             <div className="flex items-start gap-2.5">
-              <Eye size={16} className="text-secondary mt-0.5" />
+              <Sunrise size={16} className="text-secondary mt-0.5" />
               <div>
-                <div className="text-[13.5px]">Record window titles</div>
-                <div className="text-[12px] text-secondary">See tabs, documents and projects inside each app. Stored locally, deletable any time.</div>
+                <div className="text-[13.5px]">When does your day start?</div>
+                <div className="text-[12px] text-secondary">Anything before this hour counts toward the previous day. Night owls pick 4 AM or later.</div>
               </div>
             </div>
-            <Toggle checked={titles} onChange={setTitles} />
+            <Segmented options={DAY_START_OPTIONS} value={dayStart} onChange={setDayStart} />
           </div>
         </div>
 

@@ -1,7 +1,7 @@
 {
   "name": "desktime",
   "productName": "DeskTime",
-  "version": "0.1.0-beta.1",
+  "version": "0.1.0-beta.2",
   "description": "DeskTime - Digital Wellbeing / Screen Time for Windows. Local-only usage tracking.",
   "main": "./out/main/index.js",
   "author": "DeskTime contributors",
@@ -18,8 +18,13 @@
     "dist:signed": "electron-vite build && cross-env-shell \"CSC_LINK=certs/desktime-dev.pfx CSC_KEY_PASSWORD=desktime-dev electron-builder --win\""
   },
   "dependencies": {
-    "@fontsource-variable/manrope": "^5.3.0",
+    "@fontsource-variable/caveat": "^5.3.0",
+    "@fontsource-variable/roboto": "^5.3.0",
+    "@fontsource-variable/saira": "^5.3.0",
+    "@fontsource/comic-neue": "^5.3.0",
     "better-sqlite3": "^12.11.1",
+    "bot-avatars": "^0.1.1",
+    "electron-updater": "^6.8.9",
     "koffi": "^2.16.3"
   },
   "devDependencies": {
@@ -46,6 +51,11 @@
   "build": {
     "appId": "com.desktime.app",
     "productName": "DeskTime",
+    "publish": {
+      "provider": "github",
+      "owner": "ManasJhaMJ",
+      "repo": "DeskTime"
+    },
     "directories": {
       "output": "release",
       "buildResources": "resources"
