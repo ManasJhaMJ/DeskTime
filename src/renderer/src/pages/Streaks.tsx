@@ -5,7 +5,7 @@ import { STREAK_KINDS } from '../../../shared/types'
 import { usePoll } from '@/lib/hooks'
 import { fmtDuration, today } from '@/lib/format'
 import { fmtMinutes } from '@/lib/duration'
-import { Card, Empty, Page, PageHeader, Segmented } from '@/components/ui'
+import { AppIcon, Card, Dot, Empty, Page, PageHeader, Segmented, Select } from '@/components/ui'
 import { DurationField } from '@/components/DurationField'
 import { YearGraph } from '@/components/YearGraph'
 
@@ -187,13 +187,7 @@ function AddStreak({ cats, apps, onAdded }: { cats: Category[]; apps: AppInfo[];
       <div className="grid grid-cols-[1fr_160px] gap-3 mb-4">
         <label className="flex flex-col gap-1.5">
           <span className="text-[12.5px] text-secondary">Goal</span>
-          <select value={kind} onChange={(e) => setKind(e.target.value as StreakKind)}>
-            {STREAK_KINDS.map((k) => (
-              <option key={k.value} value={k.value}>
-                {k.label}
-              </option>
-            ))}
-          </select>
+          <Select<StreakKind> aria-label="Goal" value={kind} options={STREAK_KINDS} onChange={setKind} />
         </label>
         <label className="flex flex-col gap-1.5">
           <span className="text-[12.5px] text-secondary">{def.needs === 'none' && kind.endsWith('Under') ? 'Stay under' : kind.endsWith('Under') ? 'Stay under' : 'Reach'}</span>
@@ -203,20 +197,17 @@ function AddStreak({ cats, apps, onAdded }: { cats: Category[]; apps: AppInfo[];
       {def.needs !== 'none' && (
         <label className="flex flex-col gap-1.5 mb-4">
           <span className="text-[12.5px] text-secondary">{def.needs === 'category' ? 'Category' : 'Application'}</span>
-          <select value={refId} onChange={(e) => setRefId(e.target.value === '' ? '' : Number(e.target.value))}>
-            <option value="">Choose {def.needs === 'category' ? 'a category' : 'an application'}</option>
-            {def.needs === 'category'
-              ? cats.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name}
-                  </option>
-                ))
-              : apps.map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.displayName}
-                  </option>
-                ))}
-          </select>
+          <Select<number>
+            aria-label={def.needs === 'category' ? 'Category' : 'Application'}
+            placeholder={`Choose ${def.needs === 'category' ? 'a category' : 'an application'}`}
+            value={refId === '' ? null : refId}
+            options={
+              def.needs === 'category'
+                ? cats.map((c) => ({ value: c.id, label: c.name, icon: <Dot color={c.color} /> }))
+                : apps.map((a) => ({ value: a.id, label: a.displayName, icon: <AppIcon icon={a.icon} name={a.displayName} appId={a.id} size={18} /> }))
+            }
+            onChange={setRefId}
+          />
         </label>
       )}
       <div className="flex items-center gap-4">

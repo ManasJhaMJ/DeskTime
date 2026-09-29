@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { motion } from 'framer-motion'
+import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { AnimatePresence, motion } from 'framer-motion'
+import { Check, ChevronDown } from 'lucide-react'
 import { colorForApp } from '@/lib/palette'
 import { STATIC, pageVariants, riseVariants } from '@/lib/motion'
 
@@ -240,6 +241,7 @@ export function Toggle({
   )
 }
 
+/** Pill switch. The raised pill slides between options instead of jumping. */
 export function Segmented<T extends string | number>({
   options,
   value,
@@ -249,6 +251,9 @@ export function Segmented<T extends string | number>({
   value: T
   onChange: (v: T) => void
 }): JSX.Element {
+  // Each instance needs its own layout group, or pills of neighbouring controls would fly between them.
+  const group = useId()
+  const pillStyle = { background: 'var(--card)', boxShadow: '0 1px 2px rgba(15,23,42,0.08), 0 0 0 1px var(--border)' }
   return (
     <div className="inline-flex p-1 rounded-xl border border-border gap-0.5" style={{ background: 'var(--control)' }}>
       {options.map((o) => {
@@ -260,16 +265,141 @@ export function Segmented<T extends string | number>({
             onClick={() => onChange(o.value)}
             className={`relative px-3 py-1.5 rounded-lg text-[13px] transition-colors ${on ? 'text-primary' : 'text-secondary hover:text-primary'}`}
           >
-            {on && (
-              <span
-                className="absolute inset-0 rounded-lg"
-                style={{ background: 'var(--card)', boxShadow: '0 1px 2px rgba(15,23,42,0.08), 0 0 0 1px var(--border)' }}
-              />
-            )}
+            {on &&
+              (STATIC ? (
+                <span className="absolute inset-0 rounded-lg" style={pillStyle} />
+              ) : (
+                <motion.span layoutId={`segmented-${group}`} className="absolute inset-0 rounded-lg" style={pillStyle} transition={{ type: 'spring', stiffness: 480, damping: 38 }} />
+              ))}
             <span className="relative">{o.label}</span>
           </button>
         )
       })}
+    </div>
+  )
+}
+
+export interface SelectOption<T> {
+  value: T
+  label: string
+  /** Optional leading element, e.g. an application icon. */
+  icon?: ReactNode
+}
+
+/**
+ * Drop-down that matches the rest of the controls: rounded trigger, a card-styled menu that fades and rises in,
+ * check mark on the current option. Arrow keys move, Enter picks, Escape closes.
+ */
+export function Select<T extends string | number>({
+  options,
+  value,
+  onChange,
+  placeholder = 'Choose an option',
+  className = '',
+  disabled,
+  'aria-label': ariaLabel
+}: {
+  options: SelectOption<T>[]
+  /** null shows the placeholder. */
+  value: T | null
+  onChange: (v: T) => void
+  placeholder?: string
+  className?: string
+  disabled?: boolean
+  'aria-label'?: string
+}): JSX.Element {
+  const [open, setOpen] = useState(false)
+  const [cursor, setCursor] = useState(-1)
+  const root = useRef<HTMLDivElement>(null)
+  const listRef = useRef<HTMLUListElement>(null)
+  const current = options.find((o) => o.value === value) ?? null
+
+  useEffect(() => {
+    if (!open) return
+    const away = (e: MouseEvent): void => {
+      if (!root.current?.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', away)
+    return () => document.removeEventListener('mousedown', away)
+  }, [open])
+
+  useEffect(() => {
+    if (open) setCursor(Math.max(0, options.findIndex((o) => o.value === value)))
+  }, [open, options, value])
+
+  // Keep the highlighted option in view while arrowing through a long list.
+  useEffect(() => {
+    if (open && cursor >= 0) listRef.current?.children[cursor]?.scrollIntoView({ block: 'nearest' })
+  }, [open, cursor])
+
+  const pick = (o: SelectOption<T>): void => {
+    onChange(o.value)
+    setOpen(false)
+  }
+  const onKey = (e: React.KeyboardEvent): void => {
+    if (disabled) return
+    if (e.key === 'Escape' && open) {
+      e.preventDefault()
+      setOpen(false)
+    } else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (!open) setOpen(true)
+      else setCursor((c) => Math.max(0, Math.min(options.length - 1, c + (e.key === 'ArrowDown' ? 1 : -1))))
+    } else if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      if (!open) setOpen(true)
+      else if (options[cursor]) pick(options[cursor])
+    }
+  }
+
+  return (
+    <div ref={root} className={`relative ${className}`} onKeyDown={onKey}>
+      <button
+        type="button"
+        className="select-trigger w-full flex items-center gap-2 text-left"
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        disabled={disabled}
+        onClick={() => setOpen((v) => !v)}
+      >
+        {current?.icon && <span className="shrink-0 grid place-items-center">{current.icon}</span>}
+        <span className={`flex-1 truncate ${current ? '' : 'text-muted'}`}>{current ? current.label : placeholder}</span>
+        <ChevronDown size={14} className={`shrink-0 text-secondary transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      <AnimatePresence>
+        {open && (
+          <motion.ul
+            ref={listRef}
+            role="listbox"
+            initial={STATIC ? false : { opacity: 0, y: -4, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={STATIC ? undefined : { opacity: 0, y: -4, scale: 0.98, transition: { duration: 0.12 } }}
+            transition={{ duration: 0.18, ease: [0.2, 0.8, 0.2, 1] }}
+            className="select-menu absolute left-0 right-0 top-full z-30 max-h-64 overflow-y-auto p-1 origin-top"
+            onMouseLeave={() => setCursor(-1)}
+          >
+            {options.length === 0 && <li className="px-2.5 py-2 text-[12.5px] text-muted">Nothing to choose from</li>}
+            {options.map((o, i) => {
+              const on = o.value === value
+              return (
+                <li
+                  key={String(o.value)}
+                  role="option"
+                  aria-selected={on}
+                  className={`flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[13px] cursor-pointer ${i === cursor ? 'bg-card-2' : ''}`}
+                  onMouseEnter={() => setCursor(i)}
+                  onClick={() => pick(o)}
+                >
+                  {o.icon && <span className="shrink-0 grid place-items-center">{o.icon}</span>}
+                  <span className="flex-1 truncate">{o.label}</span>
+                  {on && <Check size={13} strokeWidth={2.5} className="text-accent shrink-0" />}
+                </li>
+              )
+            })}
+          </motion.ul>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
@@ -280,7 +410,7 @@ export function Row({
   children
 }: {
   label: string
-  hint?: string
+  hint?: ReactNode
   children?: ReactNode
 }): JSX.Element {
   return (

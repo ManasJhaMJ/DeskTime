@@ -3,7 +3,8 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import type { CategoryUsage, DaySummary, Insights, MonthlyReport, Transition, WeeklyReport } from '../../../shared/types'
 import { usePoll } from '@/lib/hooks'
 import { addDays, addMonths, fmtDay, fmtDayShort, fmtDuration, fmtHour, fmtMonth, fmtTime, monthOf, today, weekStart, weekdayShort } from '@/lib/format'
-import { AppIcon, Card, Dot, Empty, Page, PageHeader, Segmented, StatTile } from '@/components/ui'
+import { AppIcon, Card, Empty, Page, PageHeader, Segmented, StatTile } from '@/components/ui'
+import { CategoryBreakdown } from '@/components/CategoryBreakdown'
 import { DayNav } from '@/components/DayNav'
 import { CompareBars, HourlyStrip, UsageBars } from '@/components/UsageBars'
 import { MonthHeatmap } from '@/components/MonthHeatmap'
@@ -125,7 +126,7 @@ export function Reports(): JSX.Element {
           </div>
           <div className="grid grid-cols-[1fr_320px] gap-3 mb-3">
             <MonthWeeks report={monthly.data} />
-            <MonthCategories cats={monthCats.data ?? []} />
+            <CategoryBreakdown cats={monthCats.data ?? []} />
           </div>
           <InsightsCard insights={monthInsights.data} period="this month" />
         </>
@@ -359,35 +360,6 @@ function MonthWeeks({ report }: { report: MonthlyReport | null }): JSX.Element {
           <div className="num text-[20px] font-semibold mt-1">{fmtDuration(avg(we))}</div>
         </div>
       </div>
-    </Card>
-  )
-}
-
-function MonthCategories({ cats }: { cats: CategoryUsage[] }): JSX.Element {
-  const total = cats.reduce((s, c) => s + c.activeMs, 0)
-  return (
-    <Card title="By category">
-      {total < 60_000 ? (
-        <Empty title="No categorized time yet" />
-      ) : (
-        <>
-          <div className="flex h-2.5 rounded-full overflow-hidden gap-[2px] bg-[var(--card-2)]">
-            {cats.map((c) => (
-              <div key={c.id} style={{ width: `${(c.activeMs / total) * 100}%`, background: c.color }} title={`${c.name} ${fmtDuration(c.activeMs)}`} />
-            ))}
-          </div>
-          <ul className="mt-3 flex flex-col gap-1.5">
-            {cats.map((c) => (
-              <li key={c.id} className="flex items-center gap-2 text-[13px]">
-                <Dot color={c.color} />
-                <span className="flex-1 truncate">{c.name}</span>
-                <span className="num text-secondary">{fmtDuration(c.activeMs)}</span>
-                <span className="num text-muted text-[11.5px] w-9 text-right">{Math.round((c.activeMs / total) * 100)}%</span>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
     </Card>
   )
 }

@@ -25,6 +25,11 @@ export interface Settings {
   capAtDisplayOff: boolean
   /** Keep time active while the foreground app (or any app) holds the microphone or camera. */
   callsCountActive: boolean
+  /**
+   * Record apps that play sound while another app is in front (music, podcasts, a video in a background tab) as
+   * listening time for that app. Shown as idle for the app; never added to the day's screen time.
+   */
+  backgroundAudio: boolean
   onboardingDone: boolean
   /** Follow Windows, or force a mode. */
   theme: 'system' | 'light' | 'dark'
@@ -55,6 +60,16 @@ export interface Settings {
 
 export const AVATAR_BOTS = ['ghost', 'cat', 'blob', 'clover', 'droid', 'alien', 'cloud'] as const
 export type AvatarBot = (typeof AVATAR_BOTS)[number]
+/** Display names for the bundled companions, shown when hovering an avatar in Settings. */
+export const AVATAR_NAMES: Record<AvatarBot, string> = {
+  ghost: 'Boo',
+  cat: 'Kat',
+  blob: 'Jell',
+  clover: 'Clove',
+  droid: 'Beep',
+  alien: 'Emjay',
+  cloud: 'Drift'
+}
 export type AvatarChoice = AvatarBot | 'photo' | 'none'
 export type AvatarSleeps = 'time' | 'idle' | 'never'
 
@@ -97,6 +112,7 @@ export const DEFAULT_SETTINGS: Settings = {
   passiveMinutes: 5,
   capAtDisplayOff: true,
   callsCountActive: true,
+  backgroundAudio: true,
   onboardingDone: false,
   theme: 'system',
   appearance: DEFAULT_APPEARANCE,
@@ -201,7 +217,10 @@ export interface AppUsage extends AppInfo {
   activeMs: number
   /** Part of activeMs with no input (reading, watching). */
   passiveMs: number
+  /** Idle in front, plus listening time (see below). */
   idleMs: number
+  /** Part of idleMs during which the app played sound while another app was in front. */
+  listeningMs: number
   sessions: number
   longestMs: number
 }
@@ -212,6 +231,8 @@ export interface DaySummary {
   activeMs: number
   passiveMs: number
   idleMs: number
+  /** Background audio across all apps; overlaps the figures above and is not part of screenMs. */
+  listeningMs: number
   sessions: number
   longestSessionMs: number
   longestSessionStart: number | null
@@ -232,6 +253,8 @@ export interface TimelineSegment {
   end: number
   isIdle: boolean
   passive: boolean
+  /** The app was playing sound while another app was in front. Always reported with isIdle set. */
+  listening: boolean
 }
 
 export interface Transition {
@@ -383,6 +406,8 @@ export interface TrackerStatus {
   idle: boolean
   locked: boolean
   currentApp: AppInfo | null
+  /** Display names of apps currently playing sound in the background. */
+  listening: string[]
   sinceTs: number
   todayScreenMs: number
   todayActiveMs: number
@@ -409,6 +434,8 @@ export interface Diagnostics {
   currentApp: string | null
   displayRequired: boolean
   devicesInUse: string[]
+  /** Apps with an audible output stream right now, with their peak level. */
+  audio: { name: string; peak: number }[]
   liveSession: { kind: 'active' | 'passive' | 'idle'; start: number } | null
   dbPath: string
   versions: { app: string; electron: string; node: string }

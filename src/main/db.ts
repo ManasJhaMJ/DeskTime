@@ -59,6 +59,8 @@ const GAP_MS = 2500
 const MIN_SWITCH_MS = 3000
 const HOUR = 3_600_000
 
+export type SessionKind = 0 | 1 | 2 | 3
+
 interface SessionRow {
   id: number
   app_id: number
@@ -131,6 +133,7 @@ function activeStretches(rows: SessionRow[]): Stretch[] {
   const out: Stretch[] = []
   let cur: Stretch | null = null
   for (const r of rows) {
+    if (r.is_idle === 3) continue
     if (r.is_idle === 1) {
       if (cur) out.push(cur)
       cur = null
@@ -151,6 +154,7 @@ function transitions(rows: SessionRow[]): Map<string, Transition> {
   const map = new Map<string, Transition>()
   let prev: SessionRow | null = null
   for (const r of rows) {
+    if (r.is_idle === 3) continue
     if (r.is_idle === 1) {
       prev = null
       continue
@@ -332,6 +336,11 @@ export class DB {
       this.db.exec('CREATE TABLE IF NOT EXISTS streak_freezes (streak_id INTEGER NOT NULL REFERENCES streaks(id) ON DELETE CASCADE, day TEXT NOT NULL, PRIMARY KEY (streak_id, day)) WITHOUT ROWID')
       this.db.pragma('user_version = 8')
     }
+    if (version < 9) {
+      // Background audio: sessions of kind 3 (listening) overlap the foreground row; compacted days keep them apart.
+      this.db.exec('ALTER TABLE daily_totals ADD COLUMN listening INTEGER NOT NULL DEFAULT 0')
+      this.db.pragma('user_version = 9')
+    }
   }
 
   /**
@@ -370,10 +379,11 @@ export class DB {
     this.db.prepare('UPDATE sessions SET app_id = ? WHERE app_id = ?').run(target, source)
     this.db
       .prepare(
-        `INSERT INTO daily_totals (day, app_id, active, passive, idle, sessions, longest)
-         SELECT day, ?, active, passive, idle, sessions, longest FROM daily_totals WHERE app_id = ?
+        `INSERT INTO daily_totals (day, app_id, active, passive, idle, listening, sessions, longest)
+         SELECT day, ?, active, passive, idle, listening, sessions, longest FROM daily_totals WHERE app_id = ?
          ON CONFLICT(day, app_id) DO UPDATE SET active = active + excluded.active, passive = passive + excluded.passive,
-           idle = idle + excluded.idle, sessions = sessions + excluded.sessions, longest = MAX(longest, excluded.longest)`
+           idle = idle + excluded.idle, listening = listening + excluded.listening, sessions = sessions + excluded.sessions,
+           longest = MAX(longest, excluded.longest)`
       )
       .run(target, source)
     this.db.prepare('DELETE FROM daily_totals WHERE app_id = ?').run(source)
@@ -486,7 +496,7 @@ export class DB {
       ),
       dayTotals: p(
         `SELECT COALESCE(SUM(u.screen), 0) AS screen, COALESCE(SUM(u.active), 0) AS active FROM (
-           SELECT app_id, end_ts - start_ts AS screen,
+           SELECT app_id, CASE WHEN is_idle <> 3 THEN end_ts - start_ts ELSE 0 END AS screen,
                   CASE WHEN is_idle IN (0, 2) THEN end_ts - start_ts ELSE 0 END AS active FROM sessions WHERE day = ?
            UNION ALL
            SELECT app_id, active + idle, active FROM daily_totals WHERE day = ?
@@ -529,7 +539,7 @@ export class DB {
       deleteFrozen: p('DELETE FROM streak_freezes WHERE streak_id = ? AND day = ?'),
       compactedDayApps: p(
         `SELECT e.id AS app_id, SUM(t.active) AS active, SUM(t.passive) AS passive, SUM(t.idle) AS idle,
-                SUM(t.sessions) AS sessions, MAX(t.longest) AS longest
+                SUM(t.listening) AS listening, SUM(t.sessions) AS sessions, MAX(t.longest) AS longest
          FROM daily_totals t JOIN apps a ON a.id = t.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
          WHERE t.day = ? AND e.hidden = 0 GROUP BY e.id`
       ),
@@ -742,12 +752,12 @@ export class DB {
   /** Reports `sourceId` (and anything already merged into it) under `targetId`. Reversible with unmergeApp. */
   // ---- sessions ---------------------------------------------------------
 
-  /** kind: 0 active (input), 1 idle, 2 passive (no input, within the passive band). */
-  insertSession(appId: number, start: number, end: number, kind: 0 | 1 | 2, day: string): number {
+  /** kind: 0 active (input), 1 idle, 2 passive (no input, within the passive band), 3 listening (background audio). */
+  insertSession(appId: number, start: number, end: number, kind: SessionKind, day: string): number {
     return Number(this.stmts.insertSession.run(appId, start, end, kind, day).lastInsertRowid)
   }
 
-  setSessionKind(id: number, kind: 0 | 1 | 2): void {
+  setSessionKind(id: number, kind: SessionKind): void {
     this.db.prepare('UPDATE sessions SET is_idle = ? WHERE id = ?').run(kind, id)
   }
 
@@ -778,10 +788,15 @@ export class DB {
     let activeMs = 0
     let passiveMs = 0
     let idleMs = 0
+    let listeningMs = 0
     let firstActivity: number | null = null
     let lastActivity: number | null = null
     for (const r of rows) {
       const dur = r.end_ts - r.start_ts
+      if (r.is_idle === 3) {
+        listeningMs += dur
+        continue
+      }
       screenMs += dur
       if (r.is_idle === 1) idleMs += dur
       else {
@@ -808,6 +823,7 @@ export class DB {
       activeMs,
       passiveMs,
       idleMs,
+      listeningMs,
       sessions: stretches.length,
       longestSessionMs: longest ? longest.end - longest.start : 0,
       longestSessionStart: longest?.start ?? null,
@@ -829,10 +845,16 @@ export class DB {
       if (!u) {
         const a = this.getApp(r.app_id)
         if (!a) continue
-        u = { ...a, activeMs: 0, passiveMs: 0, idleMs: 0, sessions: 0, longestMs: 0, _cur: null }
+        u = { ...a, activeMs: 0, passiveMs: 0, idleMs: 0, listeningMs: 0, sessions: 0, longestMs: 0, _cur: null }
         byApp.set(r.app_id, u)
       }
       const dur = r.end_ts - r.start_ts
+      if (r.is_idle === 3) {
+        // Background audio: reported under idle for the app, kept apart so totals can leave it out.
+        u.idleMs += dur
+        u.listeningMs += dur
+        continue
+      }
       if (r.is_idle === 1) {
         u.idleMs += dur
         if (u._cur) {
@@ -867,6 +889,7 @@ export class DB {
       active: number
       passive: number
       idle: number
+      listening: number
       sessions: number
       longest: number
     }[]
@@ -874,7 +897,7 @@ export class DB {
     for (const r of rows) {
       const a = this.getApp(r.app_id)
       if (!a) continue
-      out.push({ ...a, activeMs: r.active, passiveMs: r.passive, idleMs: r.idle, sessions: r.sessions, longestMs: r.longest })
+      out.push({ ...a, activeMs: r.active, passiveMs: r.passive, idleMs: r.idle + r.listening, listeningMs: r.listening, sessions: r.sessions, longestMs: r.longest })
     }
     return out.sort((a, b) => b.activeMs + b.idleMs - (a.activeMs + a.idleMs))
   }
@@ -889,12 +912,14 @@ export class DB {
     let activeMs = 0
     let passiveMs = 0
     let idleMs = 0
+    let listeningMs = 0
     let sessions = 0
     let longest = 0
     for (const a of apps) {
       activeMs += a.activeMs
       passiveMs += a.passiveMs
-      idleMs += a.idleMs
+      idleMs += a.idleMs - a.listeningMs
+      listeningMs += a.listeningMs
       sessions += a.sessions
       longest = Math.max(longest, a.longestMs)
     }
@@ -910,6 +935,7 @@ export class DB {
       activeMs,
       passiveMs,
       idleMs,
+      listeningMs,
       sessions: row?.sessions ?? sessions,
       longestSessionMs: row?.longest ?? longest,
       longestSessionStart: row?.longest_start ?? null,
@@ -927,7 +953,15 @@ export class DB {
     const out: TimelineSegment[] = []
     for (const r of rows) {
       const last = out[out.length - 1]
-      if (last && last.appId === r.app_id && last.isIdle === (r.is_idle === 1) && last.passive === (r.is_idle === 2) && r.start_ts - last.end <= GAP_MS) {
+      const listening = r.is_idle === 3
+      if (
+        last &&
+        last.appId === r.app_id &&
+        last.isIdle === (r.is_idle === 1 || listening) &&
+        last.passive === (r.is_idle === 2) &&
+        last.listening === listening &&
+        r.start_ts - last.end <= GAP_MS
+      ) {
         last.end = Math.max(last.end, r.end_ts)
         continue
       }
@@ -938,8 +972,9 @@ export class DB {
         icon: r.icon,
         start: r.start_ts,
         end: r.end_ts,
-        isIdle: r.is_idle === 1,
-        passive: r.is_idle === 2
+        isIdle: r.is_idle === 1 || listening,
+        passive: r.is_idle === 2,
+        listening
       })
     }
     return out
@@ -1053,7 +1088,7 @@ export class DB {
     const hourly = new Array<number>(24).fill(0)
     const byApp = new Map<number, { name: string; icon: string | null; ms: number }>()
     for (const r of rows) {
-      if (r.is_idle === 1) continue
+      if (r.is_idle === 1 || r.is_idle === 3) continue
       splitByHour(r.start_ts, r.end_ts, (h, ms) => (hourly[h] += ms))
       const a = byApp.get(r.app_id) ?? { name: r.display_name, icon: r.icon, ms: 0 }
       a.ms += r.end_ts - r.start_ts
@@ -1338,9 +1373,10 @@ export class DB {
     const days = this.db.prepare('SELECT DISTINCT day FROM sessions WHERE day < ? ORDER BY day').all(beforeDay) as { day: string }[]
     const rawDay = this.db.prepare('SELECT app_id, start_ts, end_ts, is_idle FROM sessions WHERE day = ? ORDER BY start_ts')
     const upsert = this.db.prepare(
-      `INSERT INTO daily_totals (day, app_id, active, passive, idle, sessions, longest) VALUES (?, ?, ?, ?, ?, ?, ?)
+      `INSERT INTO daily_totals (day, app_id, active, passive, idle, listening, sessions, longest) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
        ON CONFLICT(day, app_id) DO UPDATE SET active = active + excluded.active, passive = passive + excluded.passive,
-         idle = idle + excluded.idle, sessions = sessions + excluded.sessions, longest = MAX(longest, excluded.longest)`
+         idle = idle + excluded.idle, listening = listening + excluded.listening, sessions = sessions + excluded.sessions,
+         longest = MAX(longest, excluded.longest)`
     )
     const delSessions = this.db.prepare('DELETE FROM sessions WHERE day = ?')
     const putSummary = this.db.prepare(
@@ -1359,21 +1395,25 @@ export class DB {
       let first: number | null = null
       let last: number | null = null
       for (const r of visible) {
-        if (r.is_idle === 1) continue
+        if (r.is_idle === 1 || r.is_idle === 3) continue
         if (first === null) first = r.start_ts
         last = r.end_ts
       }
       putSummary.run(day, stretches.length, longest ? longest.end - longest.start : 0, longest?.start ?? null, longest?.end ?? null, switches, first, last)
 
       const rows = rawDay.all(day) as { app_id: number; start_ts: number; end_ts: number; is_idle: number }[]
-      const byApp = new Map<number, { active: number; passive: number; idle: number; sessions: number; longest: number; cur: Stretch | null }>()
+      const byApp = new Map<number, { active: number; passive: number; idle: number; listening: number; sessions: number; longest: number; cur: Stretch | null }>()
       for (const r of rows) {
         let u = byApp.get(r.app_id)
         if (!u) {
-          u = { active: 0, passive: 0, idle: 0, sessions: 0, longest: 0, cur: null }
+          u = { active: 0, passive: 0, idle: 0, listening: 0, sessions: 0, longest: 0, cur: null }
           byApp.set(r.app_id, u)
         }
         const dur = r.end_ts - r.start_ts
+        if (r.is_idle === 3) {
+          u.listening += dur
+          continue
+        }
         if (r.is_idle === 1) {
           u.idle += dur
           if (u.cur) {
@@ -1393,7 +1433,7 @@ export class DB {
       }
       for (const [appId, u] of byApp) {
         if (u.cur) u.longest = Math.max(u.longest, u.cur.end - u.cur.start)
-        upsert.run(day, appId, u.active, u.passive, u.idle, u.sessions, u.longest)
+        upsert.run(day, appId, u.active, u.passive, u.idle, u.listening, u.sessions, u.longest)
       }
       sessions += delSessions.run(day).changes
     })

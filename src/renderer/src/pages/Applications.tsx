@@ -4,7 +4,7 @@ import type { AppDetail, AppInfo, AppUsage, Category } from '../../../shared/typ
 import { usePoll } from '@/lib/hooks'
 import { deltaText, fmtDuration, MINOR_APP_MS, today } from '@/lib/format'
 import { assignSlots, colorForApp } from '@/lib/palette'
-import { AppIcon, Card, Dot, Empty, Page, PageHeader } from '@/components/ui'
+import { AppIcon, Card, Dot, Empty, Page, PageHeader, Select } from '@/components/ui'
 import { CATEGORY_COLORS } from '@/lib/palette'
 import { DayNav } from '@/components/DayNav'
 import { UsageBars } from '@/components/UsageBars'
@@ -33,7 +33,8 @@ export function Applications(): JSX.Element {
   }, [apps.data, selectedId])
 
   const usage = apps.data ?? []
-  const total = usage.reduce((s, a) => s + a.activeMs + a.idleMs, 0)
+  // Listening overlaps other apps' time, so it is left out of the on-screen total and the share bars.
+  const total = usage.reduce((s, a) => s + a.activeMs + a.idleMs - a.listeningMs, 0)
   const list = usage.filter((a) => a.activeMs + a.idleMs >= MINOR_APP_MS)
   const minor = usage.filter((a) => a.activeMs + a.idleMs < MINOR_APP_MS)
   const minorMs = minor.reduce((s, a) => s + a.activeMs + a.idleMs, 0)
@@ -54,7 +55,7 @@ export function Applications(): JSX.Element {
             {usage.length === 0 ? (
               <Empty title="No applications recorded" hint="Switch to a day with activity, or keep using your PC." />
             ) : (
-              <ul className="py-1 min-w-0 overflow-hidden">
+              <ul className="min-w-0 overflow-hidden">
                 {(showMinor ? [...list, ...minor] : list).map((a) => {
                   const on = a.id === selectedId
                   const share = total ? ((a.activeMs + a.idleMs) / total) * 100 : 0
@@ -74,8 +75,9 @@ export function Applications(): JSX.Element {
                             <div className="flex-1 h-[4px] rounded-full bg-[var(--card-2)] overflow-hidden">
                               <div className="h-full rounded-full" style={{ width: `${share}%`, background: colorForApp(a.id) }} />
                             </div>
-                            <span className="text-[11.5px] text-muted num w-[160px] text-right whitespace-nowrap">
+                            <span className="text-[11.5px] text-muted num shrink-0 text-right whitespace-nowrap">
                               {fmtDuration(a.activeMs)} active · {a.sessions} session{a.sessions === 1 ? '' : 's'}
+                              {a.listeningMs >= 60_000 ? ` · ${fmtDuration(a.listeningMs)} listening` : ''}
                             </span>
                           </div>
                         </div>
@@ -204,21 +206,16 @@ function ManageCard({
       <div className="flex flex-col gap-4 text-[13px]">
         <div>
           <div className="text-secondary text-[12.5px] mb-1.5">Category</div>
-          <select
-            value={app.categoryId ?? ''}
-            onChange={async (e) => {
-              await window.api.setAppCategory(app.id, e.target.value === '' ? null : Number(e.target.value))
+          <Select
+            aria-label="Category"
+            className="text-[12.5px]"
+            value={app.categoryId ?? 0}
+            options={[{ value: 0, label: 'Uncategorized' }, ...cats.map((c) => ({ value: c.id, label: c.name, icon: <Dot color={c.color} /> }))]}
+            onChange={async (v) => {
+              await window.api.setAppCategory(app.id, v === 0 ? null : v)
               onChanged()
             }}
-            className="w-full !py-1.5 text-[12.5px]"
-          >
-            <option value="">Uncategorized</option>
-            {cats.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
+          />
         </div>
         <div>
           <div className="text-secondary text-[12.5px] mb-1.5">Name</div>

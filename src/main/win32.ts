@@ -58,7 +58,7 @@ const pathBuf = Buffer.alloc(2 * 1024)
 const pfnBuf = Buffer.alloc(2 * 256)
 const procCache = new Map<number, { path: string; family: string | null; at: number }>()
 
-function processInfo(pid: number): { path: string; family: string | null } | null {
+export function processInfo(pid: number): { path: string; family: string | null } | null {
   const cached = procCache.get(pid)
   const now = Date.now()
   if (cached && now - cached.at < 60_000) return cached

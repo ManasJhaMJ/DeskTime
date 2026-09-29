@@ -1,7 +1,7 @@
 {
   "name": "desktime",
   "productName": "DeskTime",
-  "version": "0.1.0-beta.2",
+  "version": "0.2.0-beta.3",
   "description": "DeskTime - Digital Wellbeing / Screen Time for Windows. Local-only usage tracking.",
   "main": "./out/main/index.js",
   "author": "DeskTime contributors",

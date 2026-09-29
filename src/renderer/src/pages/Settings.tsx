@@ -1,9 +1,9 @@
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
-import { ImagePlus } from 'lucide-react'
+import { AlertTriangle, ImagePlus } from 'lucide-react'
 import { BotAvatar } from 'bot-avatars'
 import type { Appearance, CompactResult, Diagnostics, LoginStatus, Settings as SettingsT, TrackerStatus, UpdateStatus } from '../../../shared/types'
-import { AVATAR_BOTS, DAY_START_OPTIONS, FONT_OPTIONS, RETENTION_OPTIONS } from '../../../shared/types'
+import { AVATAR_BOTS, AVATAR_NAMES, DAY_START_OPTIONS, FONT_OPTIONS, RETENTION_OPTIONS } from '../../../shared/types'
 import { ACCENT_PRESETS, DARK_BASES, LIGHT_BASES, accentForMode, applyAppearance } from '@/lib/theme'
 import { fmtTime, setDayStartHour } from '@/lib/format'
 import { useEvent, usePoll } from '@/lib/hooks'
@@ -11,7 +11,15 @@ import { fmtDayShort } from '@/lib/format'
 import { Card, Page, PageHeader, Row, Segmented, Toggle } from '@/components/ui'
 import { ColorPicker } from '@/components/ColorPicker'
 
-export function Settings({ status }: { status: TrackerStatus | null }): JSX.Element {
+/** Settings whose change only applies once the app has been started again. */
+const NEEDS_RESTART: (keyof SettingsT)[] = ['hardwareAcceleration', 'windowMaterial']
+
+/** Emphasised note used in hints for settings that need a restart. */
+function Restart({ children = 'Takes effect after restarting the app.' }: { children?: string }): JSX.Element {
+  return <strong className="font-semibold text-primary">{children}</strong>
+}
+
+export function Settings({ status, onRestartNeeded }: { status: TrackerStatus | null; onRestartNeeded: () => void }): JSX.Element {
   const [s, setS] = useState<SettingsT | null>(null)
   const [version, setVersion] = useState('')
   const info = usePoll(() => window.api.dataInfo(), [], 30_000)
@@ -27,6 +35,7 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
     }
   }
   const [login, setLogin] = useState<LoginStatus | null>(null)
+  const [confirmQuit, setConfirmQuit] = useState(false)
   const refreshLogin = (): void => {
     void window.api.loginStatus().then(setLogin)
   }
@@ -41,6 +50,7 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
     if (!s) return
     const next = { ...s, ...p }
     setS(next)
+    if (NEEDS_RESTART.some((k) => k in p && p[k] !== s[k])) onRestartNeeded()
     const saved = await window.api.setSettings(next)
     setDayStartHour(saved.dayStartHour)
     setS(saved)
@@ -108,6 +118,12 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
         </Row>
         <Row label="Count media as active" hint="Watching a video or a fullscreen app with no keyboard or mouse input still counts as active time.">
           <Toggle checked={s.mediaCountsActive} onChange={(v) => patch({ mediaCountsActive: v })} />
+        </Row>
+        <Row
+          label="Record background audio"
+          hint="Apps that play sound while another app is in front (music, podcasts, a video in a background tab) are recorded as listening time for that app and shown under its idle time. It overlaps the app you are using and is never added to the day's screen time."
+        >
+          <Toggle checked={s.backgroundAudio} onChange={(v) => patch({ backgroundAudio: v })} />
         </Row>
         <Row label="Show screen time in tray" hint="Today's total appears in the tray tooltip and menu.">
           <Toggle checked={s.showTrayScreenTime} onChange={(v) => patch({ showTrayScreenTime: v })} />
@@ -182,10 +198,24 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
       <CompanionCard s={s} patch={patch} />
 
       <Card title="Performance" className="mb-3">
-        <Row label="Hardware acceleration" hint="Off by default to keep memory and GPU use low (about 110 MB resident instead of 190 MB). Turn on for smoother animations. Takes effect after restarting the app.">
+        <Row
+          label="Hardware acceleration"
+          hint={
+            <>
+              Off by default to keep memory and GPU use low (about 110 MB resident instead of 190 MB). Turn on for smoother animations. <Restart />
+            </>
+          }
+        >
           <Toggle checked={s.hardwareAcceleration} onChange={(v) => patch({ hardwareAcceleration: v })} />
         </Row>
-        <Row label="Window glass" hint="Windows 11 draws Mica or Acrylic behind the window with no cost to the app. Takes effect after restarting. Best with the Neutral or Navy base.">
+        <Row
+          label="Window glass"
+          hint={
+            <>
+              Windows 11 draws Mica or Acrylic behind the window with no cost to the app. <Restart /> Best with the Neutral or Navy base.
+            </>
+          }
+        >
           <Segmented
             options={[
               { value: 'none', label: 'Off' },
@@ -242,16 +272,44 @@ export function Settings({ status }: { status: TrackerStatus | null }): JSX.Elem
 
       <DiagnosticsCard />
 
-      <Card title="About">
+      <Card title="About" className="mb-3">
         <Row label={`DeskTime ${version}`} hint="Screen time for Windows. Logs hold only app health (start, errors, crashes), never your activity. Attach the newest log when reporting a problem.">
           <button className="btn" onClick={() => window.api.openLogs()}>
             Open logs
           </button>
-          <button className="btn btn-ghost" onClick={() => window.api.quit()}>
-            Quit app
-          </button>
         </Row>
         <UpdateRows s={s} patch={patch} />
+      </Card>
+
+      <Card title="Quit">
+        <Row label="Quit DeskTime" hint="Close this window and keep tracking from the tray, or quit completely, tray icon included.">
+          {confirmQuit ? (
+            <>
+              <button className="btn" onClick={() => window.api.closeWindow()}>
+                Keep running in background
+              </button>
+              <button className="btn btn-danger" onClick={() => window.api.quit()}>
+                Complete quit
+              </button>
+            </>
+          ) : (
+            <button className="btn btn-danger" onClick={() => setConfirmQuit(true)}>
+              Quit DeskTime
+            </button>
+          )}
+        </Row>
+        {confirmQuit && (
+          <div className="mt-3 flex items-start gap-2.5 rounded-lg px-3.5 py-3 text-[13px]" style={{ background: 'rgba(183, 121, 31, 0.1)', color: 'var(--warning)' }}>
+            <AlertTriangle size={16} className="shrink-0 mt-px" />
+            <div>
+              <div className="font-semibold">A complete quit stops all monitoring.</div>
+              <div className="mt-0.5 opacity-90">
+                Screen time, background audio, limits, streaks and reminders all stop until you start DeskTime again, and the time in between is not recorded. Keeping it in the
+                background closes this window only; the tracker stays in the tray.
+              </div>
+            </div>
+          </div>
+        )}
       </Card>
     </Page>
   )
@@ -297,11 +355,14 @@ function CompanionCard({ s, patch }: { s: SettingsT; patch: (p: Partial<Settings
             <button
               key={bot}
               type="button"
-              aria-label={bot}
+              aria-label={AVATAR_NAMES[bot]}
               aria-pressed={s.avatar === bot}
               onClick={() => patch({ avatar: bot })}
-              className="relative grid h-[32px] w-[32px] place-items-center rounded-full"
+              className="has-tip relative grid h-[32px] w-[32px] place-items-center rounded-full"
             >
+              <span className="tip" aria-hidden>
+                {AVATAR_NAMES[bot]}
+              </span>
               {s.avatar === bot && highlight}
               <span className={`relative transition-opacity ${s.avatar === bot ? '' : 'opacity-55 hover:opacity-100'}`}>
                 <BotAvatar type={bot} size={22} interactive={false} paused={s.avatar !== bot} />
@@ -417,6 +478,7 @@ function DiagnosticsCard(): JSX.Element {
         ['Attributed to', d.currentApp ?? 'nothing'],
         ['Display kept awake', yes(d.displayRequired)],
         ['Mic / camera in use', d.devicesInUse.length ? d.devicesInUse.join(', ') : 'none'],
+        ['Playing audio', d.audio.length ? d.audio.map((a) => `${a.name} (${Math.round(a.peak * 100)}%)`).join(', ') : 'nothing'],
         ['Live session', d.liveSession ? `${d.liveSession.kind} since ${fmtTime(d.liveSession.start)}` : 'none'],
         ['Database', d.dbPath],
         ['Versions', `DeskTime ${d.versions.app} · Electron ${d.versions.electron} · Node ${d.versions.node}`]

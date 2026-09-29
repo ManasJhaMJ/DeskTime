@@ -601,6 +601,11 @@ function main(): void {
   ipcMain.handle('log:open', () => shell.openPath(log.dir()))
   ipcMain.handle('log:renderer', (_e, message: string) => log.error(`renderer: ${String(message).slice(0, 2000)}`))
   ipcMain.handle('app:quit', () => quit())
+  ipcMain.handle('window:close', (e) => BrowserWindow.fromWebContents(e.sender)?.close())
+  ipcMain.handle('app:relaunch', () => {
+    app.relaunch()
+    quit()
+  })
 
   // ---- lifecycle --------------------------------------------------------
 

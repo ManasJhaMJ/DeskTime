@@ -81,6 +81,12 @@ export function Overview({
                 <span className="text-primary">{status.currentApp.displayName}</span>
               </div>
             )}
+            {status && status.listening.length > 0 && (
+              <div className="mt-1.5 flex items-center gap-2 text-[12.5px] text-secondary">
+                <Dot color="var(--accent-2)" />
+                Listening to <span className="text-primary">{status.listening.join(', ')}</span>
+              </div>
+            )}
             </div>
           </div>
           <SplitRing summary={s} />

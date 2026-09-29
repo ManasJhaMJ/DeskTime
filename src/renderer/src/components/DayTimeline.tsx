@@ -112,7 +112,8 @@ export function DayTimeline({
     const idle: Lane = { key: 'idle', appId: null, name: 'Idle', icon: null, color: NEUTRAL, idle: true, segments: [], totalMs: 0 }
     for (const s of segments) {
       const dur = s.end - s.start
-      if (s.isIdle) {
+      // Real idle is device-level and gets its own lane; listening stays with the app that played the sound.
+      if (s.isIdle && !s.listening) {
         idle.segments.push(s)
         idle.totalMs += dur
         continue
@@ -241,10 +242,14 @@ export function DayTimeline({
                       left: `${left}%`,
                       width: `${right - left}%`,
                       minWidth: 2,
-                      background: lane.idle ? undefined : lane.color,
+                      background: s.listening
+                        ? `repeating-linear-gradient(135deg, ${lane.color} 0 3px, transparent 3px 6px)`
+                        : lane.idle
+                          ? undefined
+                          : lane.color,
                       outline: isSel ? '2px solid var(--primary)' : undefined,
                       outlineOffset: 1,
-                      opacity: (hover && hover.seg.id !== s.id && !isSel ? 0.75 : 1) * (s.passive ? 0.5 : 1)
+                      opacity: (hover && hover.seg.id !== s.id && !isSel ? 0.75 : 1) * (s.passive ? 0.5 : s.listening ? 0.85 : 1)
                     }}
                     onMouseEnter={(e) => {
                       const r = ref.current?.getBoundingClientRect()
@@ -274,7 +279,13 @@ export function DayTimeline({
           }}
         >
           <div className="font-medium">
-            {hover.seg.isIdle ? `Idle · ${hover.seg.appName}` : hover.seg.passive ? `Passive · ${hover.seg.appName}` : hover.seg.appName}
+            {hover.seg.listening
+              ? `Listening · ${hover.seg.appName}`
+              : hover.seg.isIdle
+                ? `Idle · ${hover.seg.appName}`
+                : hover.seg.passive
+                  ? `Passive · ${hover.seg.appName}`
+                  : hover.seg.appName}
           </div>
           <div className="text-secondary num mt-0.5">
             {fmtTime(hover.seg.start)} to {fmtTime(hover.seg.end)}

@@ -3,7 +3,7 @@ import { Trash2 } from 'lucide-react'
 import type { AppInfo, AppLimit, LimitMode } from '../../../shared/types'
 import { usePoll } from '@/lib/hooks'
 import { fmtDuration, today } from '@/lib/format'
-import { AppIcon, Card, Empty, Meter, Page, PageHeader, Segmented } from '@/components/ui'
+import { AppIcon, Card, Empty, Meter, Page, PageHeader, Segmented, Select } from '@/components/ui'
 import { DURATION_HINT } from '@/lib/duration'
 import { DurationField } from '@/components/DurationField'
 
@@ -62,13 +62,7 @@ export function Limits(): JSX.Element {
                       </div>
                     </div>
                     <DurationField minutes={l.dailyMinutes} onCommit={(m) => update(l, { dailyMinutes: m })} className="w-[96px] text-[12.5px] !py-1.5 num" label="Daily limit" />
-                    <select value={l.mode} onChange={(e) => update(l, { mode: e.target.value as LimitMode })} className="text-[12.5px] !py-1.5">
-                      {MODES.map((m) => (
-                        <option key={m.value} value={m.value}>
-                          {m.label}
-                        </option>
-                      ))}
-                    </select>
+                    <Select<LimitMode> aria-label="Limit mode" className="w-[140px] text-[12.5px]" value={l.mode} options={MODES} onChange={(mode) => update(l, { mode })} />
                     <button className="btn btn-ghost !p-2" onClick={() => remove(l.id)} aria-label="Remove limit">
                       <Trash2 size={15} />
                     </button>
@@ -85,14 +79,13 @@ export function Limits(): JSX.Element {
         <div className="grid grid-cols-[1fr_140px] gap-3 mb-4">
           <label className="flex flex-col gap-1.5">
             <span className="text-[12.5px] text-secondary">Application</span>
-            <select value={appId} onChange={(e) => setAppId(e.target.value === '' ? '' : Number(e.target.value))}>
-              <option value="">Choose an application</option>
-              {candidates.map((a) => (
-                <option key={a.id} value={a.id}>
-                  {a.displayName}
-                </option>
-              ))}
-            </select>
+            <Select<number>
+              aria-label="Application"
+              placeholder="Choose an application"
+              value={appId === '' ? null : appId}
+              options={candidates.map((a) => ({ value: a.id, label: a.displayName, icon: <AppIcon icon={a.icon} name={a.displayName} appId={a.id} size={18} /> }))}
+              onChange={setAppId}
+            />
           </label>
           <label className="flex flex-col gap-1.5">
             <span className="text-[12.5px] text-secondary">Time per day</span>

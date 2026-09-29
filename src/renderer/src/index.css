@@ -333,6 +333,61 @@ select:focus {
   box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
 }
 
+/* Custom drop-down (components/ui Select): the trigger looks like an input, the menu like a floating card. */
+.select-trigger {
+  background: var(--card);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-ctl);
+  padding: 8px 10px 8px 11px;
+  color: var(--primary);
+  font: inherit;
+  transition: border-color 160ms var(--ease-out), box-shadow 160ms var(--ease-out), background 160ms var(--ease-out);
+}
+.select-trigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--border-2) 60%, var(--accent));
+}
+.select-trigger:focus-visible,
+.select-trigger[aria-expanded='true'] {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(var(--accent-rgb), 0.18);
+}
+.select-menu {
+  background: var(--card);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-ctl);
+  box-shadow: var(--shadow-hover);
+  list-style: none;
+  margin: 6px 0 0;
+}
+html.material .select-trigger {
+  background: color-mix(in srgb, var(--card) 85%, transparent);
+}
+
+/* Small label above a hovered control (companion names in Settings). */
+.tip {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 6px);
+  transform: translate(-50%, 4px);
+  padding: 3px 8px;
+  border-radius: 6px;
+  background: var(--primary);
+  color: var(--bg);
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  z-index: 10;
+  transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out);
+}
+.has-tip:hover .tip,
+.has-tip:focus-visible .tip {
+  opacity: 1;
+  transform: translate(-50%, 0);
+}
+
 button {
   font: inherit;
   cursor: pointer;
@@ -367,9 +422,15 @@ button:disabled {
   color: #fff;
   box-shadow: 0 6px 18px -8px rgba(var(--accent-rgb), 0.6);
 }
+/* Hover deepens the accent a step instead of brightening it: white text stays readable and the button never glows. */
 .btn-accent:hover:not(:disabled) {
-  background: var(--accent-2);
-  border-color: var(--accent-2);
+  background: color-mix(in srgb, var(--accent) 86%, #000);
+  border-color: color-mix(in srgb, var(--accent) 86%, #000);
+  box-shadow: 0 4px 12px -8px rgba(var(--accent-rgb), 0.5);
+}
+.btn-accent:active:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 78%, #000);
+  border-color: color-mix(in srgb, var(--accent) 78%, #000);
 }
 .btn-danger {
   color: var(--danger);
@@ -512,9 +573,12 @@ input[type='range'].color-slider::-webkit-slider-thumb {
 /* ---- Windows glass (Mica / Acrylic) ----------------------------------------
    The main process sets backgroundMaterial on the window and passes material=1; the page must then let the
    system backdrop show through: transparent body, translucent chrome and cards. */
-html.material,
-html.material body {
+html.material {
   background: transparent;
+}
+/* A wash of the base color over the glass keeps the wallpaper tint soft: whiter in light mode, deeper in dark. */
+html.material body {
+  background: color-mix(in srgb, var(--bg) 45%, transparent);
 }
 html.material .sidebar {
   background: color-mix(in srgb, var(--bg) 35%, transparent);

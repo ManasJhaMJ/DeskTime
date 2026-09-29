@@ -102,6 +102,10 @@ const api = {
   /** Hex color of the page pixel at CSS coordinates, or null. */
   sampleColor: (x: number, y: number): Promise<string | null> => ipcRenderer.invoke('color:sample', x, y),
   quit: (): Promise<void> => ipcRenderer.invoke('app:quit'),
+  /** Closes the dashboard window; the tracker keeps running in the tray. */
+  closeWindow: (): Promise<void> => ipcRenderer.invoke('window:close'),
+  /** Quits and starts the app again, so settings that need a restart take effect. */
+  relaunch: (): Promise<void> => ipcRenderer.invoke('app:relaunch'),
 
   on: (channel: EventChannel, cb: (payload: unknown) => void): (() => void) => {
     if (!EVENTS.includes(channel)) return () => {}

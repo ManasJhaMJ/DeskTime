@@ -1,3 +1,50 @@
+# DeskTime 0.2.0-beta.3
+
+The first beta that arrives through the app itself: on beta.2, open Settings > About and press **Check now**.
+Data and settings carry over.
+
+## New
+
+**Background audio is recorded.** Music, podcasts or a video in a background tab used to disappear, because only
+the app in front counts as screen time. DeskTime now reads the Windows audio session list, the same data the
+volume mixer shows, and records apps that play sound behind another app as *listening* time. No sound is captured.
+
+- Shows under the app's idle time, as a hatched block on its Timeline lane, and as "Listening to Spotify" on the Overview.
+- Never added to the day's screen time, so totals, limits and streaks are unchanged.
+- Turn it off under Settings > Tracking > Record background audio.
+
+**Timeline is now the detailed view of your day.** Eight tiles cover screen time against yesterday, active and
+passive, idle, focus, sessions, breaks, app switches and the day span. Below the lanes: active time by hour, time by
+category, the top applications with their share, and the most common switches. Past days get the same breakdown.
+
+**Quit from Settings.** A Quit card at the bottom of Settings offers "Keep running in background" or "Complete quit",
+with a warning that a complete quit stops all monitoring.
+
+**Companions have names.** Boo, Kat, Jell, Clove, Beep, Emjay and Drift. Hover an avatar in Settings to see who is who.
+
+## Improved
+
+- Settings is pinned to the bottom of the sidebar.
+- Drop-downs match the rest of the controls: rounded, with icons and category colours, keyboard friendly.
+- Option switches slide to the chosen value instead of jumping.
+- Changing hardware acceleration or window glass shows a "Restart now" prompt. Hints that need a restart are in bold.
+- Accent buttons darken on hover instead of brightening, so the label stays readable.
+- Window glass is softer: the wallpaper tint reads whiter in light mode and calmer in dark mode.
+- Reports > Monthly > By category shows how many applications each category holds.
+
+## Fixed
+
+- A thin strip above the first row of the Applications list.
+
+## Update
+
+**From beta.2:** Settings > About > **Check now**, then **Download** and **Restart to update**. A downloaded update also
+installs the next time the app quits.
+
+**From beta.1 or a fresh install:** run `DeskTime-Setup-0.2.0-beta.3.exe`. The installer is not code-signed yet, so
+SmartScreen shows "Windows protected your PC": click **More info**, then **Run anyway**. Installs per user, no admin
+rights needed.
+
 # DeskTime 0.1.0-beta.2
 
 Second beta. Installs over beta.1; data and settings are kept (database schema moves from version 5 to 8). This is

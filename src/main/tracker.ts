@@ -4,21 +4,25 @@
 // Session kinds: 0 active (input), 2 passive (no input inside the passive band, e.g. reading),
 // 1 idle (away). Media playback and calls keep time active with no input. Once idle exceeds the
 // display-sleep timeout the screen is off and nothing is recorded until input returns.
+// Kind 3 (listening) is a second, overlapping track: apps that play sound while another app is in
+// front. It is recorded per app alongside the foreground session and never counts as screen time.
 import { EventEmitter } from 'events'
 import { app as electronApp, nativeImage, powerMonitor } from 'electron'
 import { execFile } from 'child_process'
 import { existsSync, readdirSync } from 'fs'
 import { basename, dirname, extname, join } from 'path'
-import { DB, dayStart, toDay } from './db'
+import { DB, dayStart, toDay, type SessionKind } from './db'
 import {
   friendlyName,
   getForeground,
   isDisplayRequired,
   isKnownFriendly,
+  processInfo,
   SYSTEM_PROCESSES,
   type ForegroundInfo
 } from './win32'
 import { appInCall, devicesInUse } from './consent'
+import { audioSources } from './audio'
 import { displayTimeoutInfo, displayTimeoutSec, refreshDisplayTimeout } from './power'
 import type { AppInfo, Diagnostics, Settings, TrackerStatus } from '../shared/types'
 
@@ -38,10 +42,17 @@ interface Live {
   id: number
   /** Raw app the session is recorded under (merges are applied at query time). */
   appId: number
-  kind: Kind
+  kind: SessionKind
   start: number
   end: number
   day: string
+}
+
+/** One app's open listening session plus when it was last heard. */
+interface Listening extends Live {
+  app: AppInfo
+  lastHeard: number
+  peak: number
 }
 
 const TICK_MS = 1000
@@ -52,7 +63,10 @@ const STALL_MS = 10_000
 const DEBOUNCE_MS = 2000
 /** How long to keep attributing time to the previous app while a non-real window (broker, splash) is in front. */
 const UNREAL_GRACE_MS = 15_000
-/** A window title must persist this long before it is recorded (skips tab-cycling and loading titles). */
+/** Audio sessions are scanned this often; cheap, but there is no need to do it every second. */
+const AUDIO_POLL_MS = 2000
+/** An app keeps its listening session open this long after its output went quiet (gaps between tracks). */
+const AUDIO_HOLD_MS = 12_000
 
 export class Tracker extends EventEmitter {
   private timer: NodeJS.Timeout | null = null
@@ -73,6 +87,10 @@ export class Tracker extends EventEmitter {
   private streakStart: number | null = null
   private readonly appCache = new Map<string, AppInfo>()
   private lastDiag: Partial<Diagnostics> = {}
+  /** Open listening sessions by raw app id. */
+  private readonly listening = new Map<number, Listening>()
+  private lastAudioPoll = 0
+  private audio: { pid: number; peak: number }[] = []
 
   constructor(
     private readonly db: DB,
@@ -103,7 +121,9 @@ export class Tracker extends EventEmitter {
   stop(): void {
     if (this.timer) clearInterval(this.timer)
     this.timer = null
-    this.closeLive(Date.now())
+    const now = Date.now()
+    this.closeLive(now)
+    this.closeListening(now)
   }
 
   pause(minutes?: number): void {
@@ -111,6 +131,7 @@ export class Tracker extends EventEmitter {
     this.paused = true
     this.pausedUntil = minutes ? now + minutes * 60_000 : null
     this.closeLive(now)
+    this.closeListening(now)
     this.streakStart = null
     this.emitStatus(true)
   }
@@ -142,7 +163,13 @@ export class Tracker extends EventEmitter {
   /** Writes the in-memory end timestamp of the live session to the database. */
   flush(): void {
     if (this.live) this.db.updateSessionEnd(this.live.id, this.live.end)
+    for (const l of this.listening.values()) this.db.updateSessionEnd(l.id, l.end)
     this.lastFlush = Date.now()
+  }
+
+  /** Display names of apps currently recorded as playing in the background. */
+  private listeningNames(): string[] {
+    return [...this.listening.values()].map((l) => l.app.displayName)
   }
 
   getStatus(): TrackerStatus {
@@ -160,6 +187,7 @@ export class Tracker extends EventEmitter {
       idle: this.state === 'idle' || this.state === 'screen-off',
       locked: this.locked,
       currentApp: this.currentApp,
+      listening: this.listeningNames(),
       sinceTs: this.sinceTs,
       todayScreenMs: totals.screenMs,
       todayActiveMs: totals.activeMs,
@@ -184,6 +212,7 @@ export class Tracker extends EventEmitter {
       currentApp: this.currentApp?.displayName ?? null,
       displayRequired: d.displayRequired ?? false,
       devicesInUse: devicesInUse(),
+      audio: [...this.listening.values()].map((l) => ({ name: l.app.displayName, peak: l.peak })),
       liveSession: this.live
         ? { kind: this.live.kind === 0 ? 'active' : this.live.kind === 1 ? 'idle' : 'passive', start: this.live.start }
         : null,
@@ -219,14 +248,81 @@ export class Tracker extends EventEmitter {
     this.live = { id, appId, kind, start, end: start, day }
   }
 
+  private closeListening(end: number, appId?: number): void {
+    for (const [id, l] of this.listening) {
+      if (appId !== undefined && id !== appId) continue
+      const e = Math.max(l.start, Math.min(end, l.end))
+      if (e - l.start < 1000) this.db.deleteSession(l.id)
+      else this.db.updateSessionEnd(l.id, e)
+      this.listening.delete(id)
+    }
+  }
+
+  /**
+   * The listening track. Every AUDIO_POLL_MS the audio sessions are scanned; each audible app that is not the app
+   * currently being counted in front gets (or keeps) an open kind-3 session. Quiet apps close after a short hold.
+   */
+  private tickListening(now: number, settings: Settings): void {
+    if (!settings.backgroundAudio) {
+      if (this.listening.size) this.closeListening(now)
+      return
+    }
+    if (now - this.lastAudioPoll >= AUDIO_POLL_MS) {
+      this.lastAudioPoll = now
+      this.audio = audioSources()
+    }
+    const heard = new Map<number, { app: AppInfo; peak: number }>()
+    for (const src of this.audio) {
+      const info = processInfo(src.pid)
+      if (!info) continue
+      const exeName = basename(info.path)
+      const app = this.resolveApp({ exePath: info.path, exeName, packageFamily: info.family })
+      const cur = heard.get(app.id)
+      if (!cur || cur.peak < src.peak) heard.set(app.id, { app, peak: src.peak })
+    }
+    // The app in front already has a row (active, passive or idle): no second, overlapping row for it.
+    const front = this.live?.appId ?? null
+    const day = toDay(now)
+    for (const [appId, h] of heard) {
+      if (appId === front) continue
+      const open = this.listening.get(appId)
+      if (open) {
+        open.lastHeard = now
+        open.peak = h.peak
+        continue
+      }
+      const id = this.db.insertSession(appId, now, now, 3, day)
+      this.listening.set(appId, { id, appId, kind: 3, start: now, end: now, day, app: h.app, lastHeard: now, peak: h.peak })
+    }
+    for (const [appId, l] of this.listening) {
+      if (appId === front || now - l.lastHeard > AUDIO_HOLD_MS) {
+        this.closeListening(appId === front ? l.end : l.lastHeard, appId)
+        continue
+      }
+      if (l.day !== day) {
+        // Midnight rollover: split at the day boundary like the foreground session.
+        const ds = dayStart(day)
+        this.db.updateSessionEnd(l.id, ds)
+        l.id = this.db.insertSession(appId, ds, ds, 3, day)
+        l.start = ds
+        l.day = day
+      }
+      l.end = now
+    }
+  }
+
   private tick(): void {
     const now = Date.now()
     try {
       // Sleep / hibernate / stalled process / clock moved backwards: do not attribute the gap to the last app.
-      if ((now - this.lastTick > STALL_MS || now < this.lastTick) && this.live) {
-        this.closeLive(Math.min(now, this.lastTick + TICK_MS))
-        this.streakStart = null
-        this.sinceTs = now
+      if (now - this.lastTick > STALL_MS || now < this.lastTick) {
+        const at = Math.min(now, this.lastTick + TICK_MS)
+        if (this.live) {
+          this.closeLive(at)
+          this.streakStart = null
+          this.sinceTs = now
+        }
+        this.closeListening(at)
       }
       this.lastTick = now
 
@@ -237,12 +333,16 @@ export class Tracker extends EventEmitter {
           return
         }
       }
+      const settings = this.getSettings()
+      // Background audio keeps being recorded while the screen is locked or this dashboard is in front.
+      const listeningBefore = this.listening.size
+      this.tickListening(now, settings)
       if (this.locked) {
-        this.emitStatus(false)
+        if (now - this.lastFlush >= FLUSH_MS) this.flush()
+        this.emitStatus(listeningBefore !== this.listening.size)
         return
       }
 
-      const settings = this.getSettings()
       refreshDisplayTimeout()
       const idleSec = powerMonitor.getSystemIdleTime()
       const idleByInput = idleSec >= settings.idleThresholdSec
@@ -400,13 +500,13 @@ export class Tracker extends EventEmitter {
 
       const info: TickInfo = { now, app, fg, isIdle: kind === 1, activeStreakMs: this.streakMs(now) }
       this.emit('tick', info)
-      this.emitStatus(prev !== state)
+      this.emitStatus(prev !== state || listeningBefore !== this.listening.size)
     } catch (err) {
       console.error('[tracker] tick failed', err)
     }
   }
 
-  private resolveApp(fg: ForegroundInfo): AppInfo {
+  private resolveApp(fg: Pick<ForegroundInfo, 'exePath' | 'exeName' | 'packageFamily'>): AppInfo {
     const key = fg.packageFamily ?? fg.exePath
     const cached = this.appCache.get(key)
     if (cached) return cached
