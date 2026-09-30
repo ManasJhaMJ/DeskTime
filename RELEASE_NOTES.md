@@ -1,4 +1,48 @@
-# DeskTime 0.2.0-beta.3
+# ScreenWise 1.0.0
+
+ScreenWise is the new name of DeskTime; the beta installers below still carry the old one. Existing data is picked up
+on first start.
+
+The first full release, on the Microsoft Store. Updates now arrive through the Store; the app itself makes no network
+requests. Beta installs from GitHub keep working but no longer update: install from the Store and remove the old copy.
+
+## New
+
+**Applications shows the whole year.** The list now holds every application you have used this year, searchable and
+scrollable, with its total time, active time and days used. Totals run up to yesterday and are computed once a day,
+so today's use joins them after midnight; the detail panel still shows today, yesterday and the 7-day average.
+Hidden applications are collapsed until you ask for them.
+
+**Yearly reports.** Reports gains a Yearly tab: month-by-month bars against the previous year, averages per weekday,
+top applications, categories and a comparison with the same part of last year. The Daily tab is gone; the Timeline
+covers a single day.
+
+**Click a day in any graph.** The weekly bars, the month grid and the year graph on Streaks open the day at a glance:
+screen, active and idle time, sessions and the three most used applications.
+
+**Days in a row.** Streaks has a built-in streak counting consecutive days with at least five minutes of screen time,
+with current and best runs.
+
+**Weekdays vs weekends.** Monthly and Yearly reports show the applications you reach for on work days beside the ones
+you use on days off, as averages per day of each type.
+
+**Personal records.** The Yearly tab lists your all-time bests: longest day, most active day, longest session, most app
+switches, earliest start and latest finish, each with its date. Click the date to see that day.
+
+## Improved
+
+- New defaults: launch at Windows startup, the amber accent, Kat as companion, and full detail kept forever.
+- Instant tooltips on buttons instead of the slow native ones; quitting asks in a dialog.
+- Updates come from the Microsoft Store. Settings > About has "Check in Store"; the GitHub update check is gone.
+- On the Timeline, "more applications" expands the list in place.
+- The zoom hint sits above the lanes instead of in the page subtitle.
+
+## Fixed
+
+- **Active time by hour** rendered no bars, on the Timeline and on Reports. The chart now draws, is taller on the
+  Timeline, and hovering a bar shows the hour and its active time.
+
+# ScreenWise 0.2.0-beta.3
 
 The first beta that arrives through the app itself: on beta.2, open Settings > About and press **Check now**.
 Data and settings carry over.
@@ -6,7 +50,7 @@ Data and settings carry over.
 ## New
 
 **Background audio is recorded.** Music, podcasts or a video in a background tab used to disappear, because only
-the app in front counts as screen time. DeskTime now reads the Windows audio session list, the same data the
+the app in front counts as screen time. ScreenWise now reads the Windows audio session list, the same data the
 volume mixer shows, and records apps that play sound behind another app as *listening* time. No sound is captured.
 
 - Shows under the app's idle time, as a hatched block on its Timeline lane, and as "Listening to Spotify" on the Overview.
@@ -45,7 +89,7 @@ installs the next time the app quits.
 SmartScreen shows "Windows protected your PC": click **More info**, then **Run anyway**. Installs per user, no admin
 rights needed.
 
-# DeskTime 0.1.0-beta.2
+# ScreenWise 0.1.0-beta.2
 
 Second beta. Installs over beta.1; data and settings are kept (database schema moves from version 5 to 8). This is
 the last release you have to install by hand: from here on the app updates itself.
@@ -99,9 +143,9 @@ the last release you have to install by hand: from here on the app updates itsel
 2. Run it. The installer is still not code-signed, so SmartScreen shows "Windows protected your PC".
    Click **More info**, then **Run anyway**. Installs per user, no admin rights needed.
 
-# DeskTime 0.1.0-beta.1
+# ScreenWise 0.1.0-beta.1
 
-First public beta of DeskTime, a local-only screen time and digital wellbeing tracker for Windows 10/11.
+First public beta of ScreenWise, a local-only screen time and digital wellbeing tracker for Windows 10/11.
 
 ## Install
 

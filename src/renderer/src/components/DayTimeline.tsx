@@ -172,14 +172,20 @@ export function DayTimeline({
 
   return (
     <div className="relative select-none" ref={ref}>
-      {zoomable && zoomed && (
-        <div className="flex items-center justify-end gap-2 mb-1 text-[11.5px] text-muted">
-          <span className="num">
-            Showing {fmtTime(viewStart)} to {fmtTime(viewStart + viewMs)}
-          </span>
-          <button className="btn btn-ghost !py-0.5 !px-2 text-[11.5px]" onClick={() => setView(FULL_DAY)}>
-            Reset
-          </button>
+      {zoomable && (
+        <div className="flex items-center justify-end gap-2 mb-1 text-[11.5px] text-muted h-5">
+          {zoomed ? (
+            <>
+              <span className="num">
+                Showing {fmtTime(viewStart)} to {fmtTime(viewStart + viewMs)}
+              </span>
+              <button className="btn btn-ghost !py-0.5 !px-2 text-[11.5px]" onClick={() => setView(FULL_DAY)}>
+                Reset
+              </button>
+            </>
+          ) : (
+            <span>Scroll over the lanes to zoom · Shift+scroll to pan</span>
+          )}
         </div>
       )}
 

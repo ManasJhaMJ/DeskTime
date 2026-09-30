@@ -2,13 +2,13 @@ import { Fragment, useEffect, useRef, useState } from 'react'
 import { motion } from 'framer-motion'
 import { AlertTriangle, ImagePlus } from 'lucide-react'
 import { BotAvatar } from 'bot-avatars'
-import type { Appearance, CompactResult, Diagnostics, LoginStatus, Settings as SettingsT, TrackerStatus, UpdateStatus } from '../../../shared/types'
+import type { Appearance, CompactResult, Diagnostics, LoginStatus, Settings as SettingsT, TrackerStatus } from '../../../shared/types'
 import { AVATAR_BOTS, AVATAR_NAMES, DAY_START_OPTIONS, FONT_OPTIONS, RETENTION_OPTIONS } from '../../../shared/types'
 import { ACCENT_PRESETS, DARK_BASES, LIGHT_BASES, accentForMode, applyAppearance } from '@/lib/theme'
 import { fmtTime, setDayStartHour } from '@/lib/format'
-import { useEvent, usePoll } from '@/lib/hooks'
+import { usePoll } from '@/lib/hooks'
 import { fmtDayShort } from '@/lib/format'
-import { Card, Page, PageHeader, Row, Segmented, Toggle } from '@/components/ui'
+import { Card, Modal, Page, PageHeader, Row, Segmented, Toggle, Tooltip } from '@/components/ui'
 import { ColorPicker } from '@/components/ColorPicker'
 
 /** Settings whose change only applies once the app has been started again. */
@@ -61,7 +61,7 @@ export function Settings({ status, onRestartNeeded }: { status: TrackerStatus | 
 
   return (
     <Page>
-      <PageHeader title="Settings" subtitle="Everything stays on this PC. No account, no cloud. The only network call is an optional update check." />
+      <PageHeader title="Settings" subtitle="Everything stays on this PC. No account, no cloud, no network requests." />
 
       <Card title="Tracking" className="mb-3">
         <Row label="Idle after" hint="Time without keyboard or mouse input before you count as idle.">
@@ -136,9 +136,11 @@ export function Settings({ status, onRestartNeeded }: { status: TrackerStatus | 
           hint={
             login === null
               ? 'Starts quietly in the tray.'
-              : login.openAtLogin
-                ? 'Registered with Windows. Starts quietly in the tray at sign-in.'
-                : 'Not registered with Windows.'
+              : login.reason
+                ? login.reason
+                : login.openAtLogin
+                  ? 'Registered with Windows. Starts quietly in the tray at sign-in.'
+                  : 'Not registered with Windows.'
           }
         >
           <Toggle checked={s.launchAtStartup} onChange={(v) => patch({ launchAtStartup: v })} />
@@ -252,9 +254,11 @@ export function Settings({ status, onRestartNeeded }: { status: TrackerStatus | 
           hint="Older days are folded into per-app daily totals, so reports, averages and categories keep working while the database stays small and fast. Minute-by-minute timelines for those days are removed. Runs a few times a day, or right away with Compact."
         >
           <Segmented options={RETENTION_OPTIONS} value={s.retentionMonths} onChange={(v) => patch({ retentionMonths: v })} />
-          <button className="btn" disabled={s.retentionMonths === 0 || compacting} onClick={() => void compactNow()} title="Fold days outside the window now">
-            {compacting ? 'Compacting…' : 'Compact'}
-          </button>
+          <Tooltip text={s.retentionMonths === 0 ? 'Nothing to fold while detail is kept forever' : 'Fold days outside the window now'}>
+            <button className="btn" disabled={s.retentionMonths === 0 || compacting} onClick={() => void compactNow()}>
+              {compacting ? 'Compacting…' : 'Compact'}
+            </button>
+          </Tooltip>
         </Row>
         {compacted && (
           <div className="text-[12.5px] text-secondary py-2">
@@ -273,43 +277,50 @@ export function Settings({ status, onRestartNeeded }: { status: TrackerStatus | 
       <DiagnosticsCard />
 
       <Card title="About" className="mb-3">
-        <Row label={`DeskTime ${version}`} hint="Screen time for Windows. Logs hold only app health (start, errors, crashes), never your activity. Attach the newest log when reporting a problem.">
+        <Row label={`ScreenWise ${version}`} hint="Screen time for Windows. Logs hold only app health (start, errors, crashes), never your activity. Attach the newest log when reporting a problem.">
           <button className="btn" onClick={() => window.api.openLogs()}>
             Open logs
           </button>
         </Row>
-        <UpdateRows s={s} patch={patch} />
+        <Row
+          label="Updates"
+          hint="Delivered by the Microsoft Store in the background, usually within a day of a release. A pending update installs the next time ScreenWise is quit completely."
+        >
+          <button className="btn" onClick={() => window.api.openStore()}>
+            Check in Store
+          </button>
+        </Row>
       </Card>
 
       <Card title="Quit">
-        <Row label="Quit DeskTime" hint="Close this window and keep tracking from the tray, or quit completely, tray icon included.">
-          {confirmQuit ? (
-            <>
-              <button className="btn" onClick={() => window.api.closeWindow()}>
-                Keep running in background
-              </button>
-              <button className="btn btn-danger" onClick={() => window.api.quit()}>
-                Complete quit
-              </button>
-            </>
-          ) : (
-            <button className="btn btn-danger" onClick={() => setConfirmQuit(true)}>
-              Quit DeskTime
-            </button>
-          )}
+        <Row label="Quit ScreenWise" hint="Close this window and keep tracking from the tray, or quit completely, tray icon included.">
+          <button className="btn btn-danger" onClick={() => setConfirmQuit(true)}>
+            Quit ScreenWise
+          </button>
         </Row>
-        {confirmQuit && (
-          <div className="mt-3 flex items-start gap-2.5 rounded-lg px-3.5 py-3 text-[13px]" style={{ background: 'rgba(183, 121, 31, 0.1)', color: 'var(--warning)' }}>
+        <Modal open={confirmQuit} onClose={() => setConfirmQuit(false)} title="Quit ScreenWise?">
+          <div className="flex items-start gap-2.5 rounded-lg px-3.5 py-3 text-[13px]" style={{ background: 'rgba(183, 121, 31, 0.1)', color: 'var(--warning)' }}>
             <AlertTriangle size={16} className="shrink-0 mt-px" />
             <div>
               <div className="font-semibold">A complete quit stops all monitoring.</div>
               <div className="mt-0.5 opacity-90">
-                Screen time, background audio, limits, streaks and reminders all stop until you start DeskTime again, and the time in between is not recorded. Keeping it in the
-                background closes this window only; the tracker stays in the tray.
+                Screen time, background audio, limits, streaks and reminders all stop until you start ScreenWise again, and the time in between is not recorded.
               </div>
             </div>
           </div>
-        )}
+          <p className="mt-3 text-[13px] text-secondary">Keeping it in the background closes this window only. The tracker stays in the tray and everything keeps counting.</p>
+          <div className="mt-5 flex items-center justify-end gap-2">
+            <button className="btn btn-ghost" onClick={() => setConfirmQuit(false)}>
+              Cancel
+            </button>
+            <button className="btn" onClick={() => window.api.closeWindow()}>
+              Keep running in background
+            </button>
+            <button className="btn btn-danger" onClick={() => window.api.quit()}>
+              Complete quit
+            </button>
+          </div>
+        </Modal>
       </Card>
     </Page>
   )
@@ -369,7 +380,10 @@ function CompanionCard({ s, patch }: { s: SettingsT; patch: (p: Partial<Settings
               </span>
             </button>
           ))}
-          <button type="button" aria-label="Your picture" aria-pressed={s.avatar === 'photo'} onClick={onPhotoButton} className="relative grid h-[32px] w-[32px] place-items-center rounded-full" title={s.avatarPhoto ? 'Click again to choose another picture' : 'Choose a picture'}>
+          <button type="button" aria-label="Your picture" aria-pressed={s.avatar === 'photo'} onClick={onPhotoButton} className="has-tip relative grid h-[32px] w-[32px] place-items-center rounded-full">
+            <span className="tip" aria-hidden>
+              {s.avatarPhoto ? (s.avatar === 'photo' ? 'Choose another picture' : 'Your picture') : 'Choose a picture'}
+            </span>
             {s.avatar === 'photo' && highlight}
             {s.avatarPhoto ? (
               <img src={s.avatarPhoto} alt="" className="relative h-[22px] w-[22px] rounded-full object-cover" />
@@ -404,62 +418,6 @@ function fmtBytes(b: number): string {
   return `${(b / 1_048_576).toFixed(1)} MB`
 }
 
-/** Update check toggle plus the current updater state with the matching action. */
-function UpdateRows({ s, patch }: { s: SettingsT; patch: (p: Partial<SettingsT>) => Promise<void> }): JSX.Element {
-  const [u, setU] = useState<UpdateStatus | null>(null)
-  useEffect(() => {
-    void window.api.updateStatus().then(setU)
-  }, [])
-  useEvent<UpdateStatus>('update:status', setU)
-
-  const text = !u
-    ? ''
-    : u.state === 'disabled'
-      ? (u.reason ?? 'Automatic checks are off.')
-      : u.state === 'checking'
-        ? 'Checking GitHub Releases…'
-        : u.state === 'available'
-          ? `DeskTime ${u.version} is available.`
-          : u.state === 'downloading'
-            ? `Downloading ${u.version}… ${u.percent}%`
-            : u.state === 'downloaded'
-              ? `DeskTime ${u.version} is downloaded. It installs when the app restarts.`
-              : u.state === 'error'
-                ? `Last check failed: ${u.error ?? 'unknown error'}`
-                : u.state === 'not-available'
-                  ? `You are on the latest version${u.checkedAt ? `. Checked ${fmtTime(u.checkedAt)}` : ''}.`
-                  : 'Checks at startup and every six hours.'
-  const busy = u?.state === 'checking' || u?.state === 'downloading'
-
-  return (
-    <>
-      <Row
-        label="Check for updates automatically"
-        hint="The only network request DeskTime makes: it asks GitHub Releases for the newest version number at startup and every six hours. Nothing about you or your usage is sent. Downloads only start when you ask."
-      >
-        <Toggle checked={s.autoUpdateCheck} onChange={(v) => patch({ autoUpdateCheck: v })} />
-      </Row>
-      <Row label="Updates" hint={text}>
-        {u?.state === 'available' && (
-          <button className="btn btn-accent" onClick={() => window.api.downloadUpdate().then(setU)}>
-            Download {u.version}
-          </button>
-        )}
-        {u?.state === 'downloaded' && (
-          <button className="btn btn-accent" onClick={() => window.api.installUpdate()}>
-            Restart to update
-          </button>
-        )}
-        {u && !busy && u.state !== 'downloaded' && (
-          <button className="btn" onClick={() => window.api.checkForUpdates().then(setU)}>
-            Check now
-          </button>
-        )}
-      </Row>
-    </>
-  )
-}
-
 /** Live view of what the tracker sees, refreshed every second while open. */
 function DiagnosticsCard(): JSX.Element {
   const [open, setOpen] = useState(false)
@@ -481,7 +439,7 @@ function DiagnosticsCard(): JSX.Element {
         ['Playing audio', d.audio.length ? d.audio.map((a) => `${a.name} (${Math.round(a.peak * 100)}%)`).join(', ') : 'nothing'],
         ['Live session', d.liveSession ? `${d.liveSession.kind} since ${fmtTime(d.liveSession.start)}` : 'none'],
         ['Database', d.dbPath],
-        ['Versions', `DeskTime ${d.versions.app} · Electron ${d.versions.electron} · Node ${d.versions.node}`]
+        ['Versions', `ScreenWise ${d.versions.app} · Electron ${d.versions.electron} · Node ${d.versions.node}`]
       ]
     : []
   return (
@@ -585,12 +543,15 @@ function AppearanceCard({ s, patch }: { s: SettingsT; patch: (p: Partial<Setting
               <button
                 key={p.id}
                 type="button"
-                title={p.name}
                 onClick={() => set({ accent: p.id })}
-                className="w-7 h-7 rounded-full grid place-items-center"
+                className="has-tip relative w-7 h-7 rounded-full grid place-items-center"
                 style={{ background: dark ? p.dark : p.light, outline: on ? '2px solid var(--primary)' : '2px solid transparent', outlineOffset: 2 }}
                 aria-label={p.name}
-              />
+              >
+                <span className="tip" aria-hidden>
+                  {p.name}
+                </span>
+              </button>
             )
           })}
           <div className="relative ml-1">

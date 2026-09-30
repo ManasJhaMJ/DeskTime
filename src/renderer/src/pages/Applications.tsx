@@ -1,83 +1,102 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, Eye, EyeOff, Plus, Trash2 } from 'lucide-react'
-import type { AppDetail, AppInfo, AppUsage, Category } from '../../../shared/types'
+import { ChevronDown, ChevronRight, Eye, EyeOff, Plus, Search, Trash2 } from 'lucide-react'
+import type { AppDetail, AppInfo, Category, YearAppUsage, YearApps } from '../../../shared/types'
 import { usePoll } from '@/lib/hooks'
-import { deltaText, fmtDuration, MINOR_APP_MS, today } from '@/lib/format'
+import { deltaText, fmtDay, fmtDuration, today } from '@/lib/format'
 import { assignSlots, colorForApp } from '@/lib/palette'
 import { AppIcon, Card, Dot, Empty, Page, PageHeader, Select } from '@/components/ui'
 import { CATEGORY_COLORS } from '@/lib/palette'
-import { DayNav } from '@/components/DayNav'
 import { UsageBars } from '@/components/UsageBars'
 
+/**
+ * Every application seen this year with its total time, searchable and scrollable, plus a detail panel for the
+ * selected one. Year totals run up to yesterday and are computed once a day, so today's use joins them after midnight.
+ */
 export function Applications(): JSX.Element {
-  const [day, setDay] = useState(today())
+  const day = today()
+  const year = Number(day.slice(0, 4))
   const [selectedId, setSelectedId] = useState<number | null>(null)
-  const [showMinor, setShowMinor] = useState(false)
-  const live = day === today()
-  const apps = usePoll<AppUsage[]>(() => window.api.dayApps(day), [day], live ? 5000 : 120_000, ['data:changed', 'apps:changed'])
+  const [query, setQuery] = useState('')
+  const [showHidden, setShowHidden] = useState(false)
+  const yearApps = usePoll<YearApps>(() => window.api.yearApps(year), [year], 300_000, ['data:changed', 'apps:changed'])
   const all = usePoll<AppInfo[]>(() => window.api.listApps(), [], 60_000, ['apps:changed'])
   const cats = usePoll<Category[]>(() => window.api.listCategories(), [], 60_000, ['apps:changed'])
   const detail = usePoll<AppDetail | null>(
     () => (selectedId === null ? Promise.resolve(null) : window.api.appDetail(selectedId, day)),
     [selectedId, day],
-    live ? 10_000 : 120_000,
+    10_000,
     ['data:changed', 'apps:changed']
   )
 
+  const apps = yearApps.data?.apps ?? []
   useEffect(() => {
-    if (apps.data) assignSlots(apps.data.map((a) => a.id))
-    if (apps.data && selectedId === null) {
-      const first = apps.data.find((a) => a.activeMs + a.idleMs >= MINOR_APP_MS) ?? apps.data[0]
-      if (first) setSelectedId(first.id)
-    }
-  }, [apps.data, selectedId])
+    if (apps.length) assignSlots(apps.map((a) => a.id))
+    if (apps.length && selectedId === null) setSelectedId(apps[0].id)
+  }, [apps, selectedId])
 
-  const usage = apps.data ?? []
-  // Listening overlaps other apps' time, so it is left out of the on-screen total and the share bars.
-  const total = usage.reduce((s, a) => s + a.activeMs + a.idleMs - a.listeningMs, 0)
-  const list = usage.filter((a) => a.activeMs + a.idleMs >= MINOR_APP_MS)
-  const minor = usage.filter((a) => a.activeMs + a.idleMs < MINOR_APP_MS)
-  const minorMs = minor.reduce((s, a) => s + a.activeMs + a.idleMs, 0)
+  const list = useMemo(() => {
+    const needle = query.trim().toLowerCase()
+    if (!needle) return apps
+    return apps.filter((a) => a.displayName.toLowerCase().includes(needle) || a.exeName.toLowerCase().includes(needle))
+  }, [apps, query])
+  const total = apps.reduce((s, a) => s + a.activeMs + a.idleMs - a.listeningMs, 0)
+  const max = apps.length ? apps[0].activeMs + apps[0].idleMs : 0
+  const used = apps.filter((a) => a.activeMs + a.idleMs > 0).length
+
   const d = detail.data
   const delta = d ? deltaText(d.todayMs, d.yesterdayMs) : null
+  const selectedYear: YearAppUsage | undefined = apps.find((a) => a.id === selectedId)
   const allApps = all.data ?? []
   const hiddenApps = allApps.filter((a) => a.hidden)
+  const through = yearApps.data?.throughDay
   return (
     <Page>
       <PageHeader
         title="Applications"
-        subtitle={`${usage.length} application${usage.length === 1 ? '' : 's'} · ${fmtDuration(total)} on screen`}
-        right={<DayNav day={day} onChange={setDay} />}
+        subtitle={`${used} application${used === 1 ? '' : 's'} used in ${year} · ${fmtDuration(total)} on screen${through ? ` through ${fmtDay(through)}` : ''}`}
       />
       <div className="grid grid-cols-[minmax(0,1fr)_380px] gap-3 items-start">
         <div className="flex flex-col gap-3">
           <Card padded={false}>
-            {usage.length === 0 ? (
-              <Empty title="No applications recorded" hint="Switch to a day with activity, or keep using your PC." />
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-border">
+              <Search size={14} className="text-muted shrink-0" />
+              <input
+                type="text"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder={`Search ${apps.length} application${apps.length === 1 ? '' : 's'}`}
+                aria-label="Search applications"
+                className="!bg-transparent !border-0 !p-0 !shadow-none flex-1 text-[13px]"
+              />
+              <span className="text-[11.5px] text-muted whitespace-nowrap">Totals for {year} · today is added after midnight</span>
+            </div>
+            {apps.length === 0 ? (
+              <Empty title="No applications recorded" hint="Applications appear here after their first full day of use." />
+            ) : list.length === 0 ? (
+              <Empty title="No application matches" hint="Try part of the name or the executable." />
             ) : (
-              <ul className="min-w-0 overflow-hidden">
-                {(showMinor ? [...list, ...minor] : list).map((a) => {
+              <ul className="min-w-0 overflow-y-auto max-h-[560px]">
+                {list.map((a) => {
                   const on = a.id === selectedId
-                  const share = total ? ((a.activeMs + a.idleMs) / total) * 100 : 0
+                  const t = a.activeMs + a.idleMs
+                  const share = max ? (t / max) * 100 : 0
                   return (
                     <li key={a.id}>
-                      <button
-                        className={`w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-card-2 ${on ? 'bg-card-2' : ''}`}
-                        onClick={() => setSelectedId(a.id)}
-                      >
+                      <button className={`w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-card-2 ${on ? 'bg-card-2' : ''}`} onClick={() => setSelectedId(a.id)}>
                         <AppIcon icon={a.icon} name={a.displayName} appId={a.id} size={26} />
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center justify-between gap-3">
                             <span className="truncate text-[13.5px]">{a.displayName}</span>
-                            <span className="num text-[13.5px]">{fmtDuration(a.activeMs + a.idleMs)}</span>
+                            <span className={`num text-[13.5px] ${t ? '' : 'text-muted'}`}>{t ? fmtDuration(t) : '—'}</span>
                           </div>
                           <div className="flex items-center gap-3 mt-1">
                             <div className="flex-1 h-[4px] rounded-full bg-[var(--card-2)] overflow-hidden">
                               <div className="h-full rounded-full" style={{ width: `${share}%`, background: colorForApp(a.id) }} />
                             </div>
                             <span className="text-[11.5px] text-muted num shrink-0 text-right whitespace-nowrap">
-                              {fmtDuration(a.activeMs)} active · {a.sessions} session{a.sessions === 1 ? '' : 's'}
-                              {a.listeningMs >= 60_000 ? ` · ${fmtDuration(a.listeningMs)} listening` : ''}
+                              {t
+                                ? `${fmtDuration(a.activeMs)} active · ${a.days} day${a.days === 1 ? '' : 's'}${a.listeningMs >= 60_000 ? ` · ${fmtDuration(a.listeningMs)} listening` : ''}`
+                                : 'No finished day yet'}
                             </span>
                           </div>
                         </div>
@@ -85,18 +104,6 @@ export function Applications(): JSX.Element {
                     </li>
                   )
                 })}
-                {minor.length > 0 && (
-                  <li>
-                    <button
-                      className="w-full flex items-center gap-2 px-4 py-2.5 text-left text-[12.5px] text-secondary hover:text-primary hover:bg-card-2"
-                      onClick={() => setShowMinor((v) => !v)}
-                    >
-                      {showMinor ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                      {showMinor ? 'Hide' : 'Show'} {minor.length} app{minor.length === 1 ? '' : 's'} under 2 minutes
-                      <span className="ml-auto num">{fmtDuration(minorMs)}</span>
-                    </button>
-                  </li>
-                )}
               </ul>
             )}
           </Card>
@@ -104,19 +111,33 @@ export function Applications(): JSX.Element {
           <CategoriesCard cats={cats.data ?? []} onChanged={() => cats.refresh()} />
 
           {hiddenApps.length > 0 && (
-            <Card title="Hidden applications" right={<span className="text-[12px] text-muted">Excluded from every statistic</span>}>
-              <ul className="divide-y divide-border">
-                {hiddenApps.map((a) => (
-                  <li key={a.id} className="flex items-center gap-3 py-2 text-[13.5px]">
-                    <AppIcon icon={a.icon} name={a.displayName} appId={a.id} size={22} />
-                    <span className="flex-1 truncate">{a.displayName}</span>
-                    <span className="text-[12px] text-muted truncate max-w-[200px]">{a.exeName}</span>
-                    <button className="btn btn-ghost !py-1 !px-2 text-[12.5px] inline-flex items-center gap-1.5" onClick={() => window.api.hideApp(a.id, false)}>
-                      <Eye size={14} /> Show
-                    </button>
-                  </li>
-                ))}
-              </ul>
+            <Card
+              title="Hidden applications"
+              right={
+                <button className="btn btn-ghost !py-1 !px-2 text-[12.5px] inline-flex items-center gap-1" onClick={() => setShowHidden((v) => !v)}>
+                  {showHidden ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                  {showHidden ? 'Hide' : `Show ${hiddenApps.length}`}
+                </button>
+              }
+            >
+              {!showHidden ? (
+                <div className="text-[12.5px] text-secondary">
+                  {hiddenApps.length} application{hiddenApps.length === 1 ? ' is' : 's are'} excluded from every statistic. Show them to bring one back.
+                </div>
+              ) : (
+                <ul className="divide-y divide-border">
+                  {hiddenApps.map((a) => (
+                    <li key={a.id} className="flex items-center gap-3 py-2 text-[13.5px]">
+                      <AppIcon icon={a.icon} name={a.displayName} appId={a.id} size={22} />
+                      <span className="flex-1 truncate">{a.displayName}</span>
+                      <span className="text-[12px] text-muted truncate max-w-[200px]">{a.exeName}</span>
+                      <button className="btn btn-ghost !py-1 !px-2 text-[12.5px] inline-flex items-center gap-1.5" onClick={() => window.api.hideApp(a.id, false)}>
+                        <Eye size={14} /> Show
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
             </Card>
           )}
         </div>
@@ -135,23 +156,29 @@ export function Applications(): JSX.Element {
                   </div>
                 </div>
                 <dl className="mt-5 grid grid-cols-2 gap-y-3 text-[13.5px]">
-                  <dt className="text-secondary">{live ? 'Active today' : 'Active this day'}</dt>
+                  <dt className="text-secondary">Active today</dt>
                   <dd className="num text-right">{fmtDuration(d.todayMs)}</dd>
-                  <dt className="text-secondary">Idle</dt>
+                  <dt className="text-secondary">Idle today</dt>
                   <dd className="num text-right">{fmtDuration(d.daily[6].idleMs)}</dd>
-                  <dt className="text-secondary">Day before</dt>
+                  <dt className="text-secondary">Yesterday</dt>
                   <dd className="num text-right">{fmtDuration(d.yesterdayMs)}</dd>
                   <dt className="text-secondary">7-day average</dt>
                   <dd className="num text-right">{fmtDuration(d.weeklyAvgMs)}</dd>
-                  <dt className="text-secondary">Sessions</dt>
+                  <dt className="text-secondary">Sessions today</dt>
                   <dd className="num text-right">{d.sessions}</dd>
                   <dt className="text-secondary">Longest session</dt>
                   <dd className="num text-right">{fmtDuration(d.longestMs)}</dd>
+                  {selectedYear && (
+                    <>
+                      <dt className="text-secondary pt-2 border-t border-border">This year</dt>
+                      <dd className="num text-right pt-2 border-t border-border">{fmtDuration(selectedYear.activeMs + selectedYear.idleMs)}</dd>
+                      <dt className="text-secondary">Days used</dt>
+                      <dd className="num text-right">{selectedYear.days}</dd>
+                    </>
+                  )}
                 </dl>
                 {delta && (
-                  <div className={`mt-4 text-[12.5px] ${delta.dir === 'down' ? 'text-success' : delta.dir === 'up' ? 'text-warning' : 'text-secondary'}`}>
-                    {delta.text.replace('yesterday', 'the day before')}
-                  </div>
+                  <div className={`mt-4 text-[12.5px] ${delta.dir === 'down' ? 'text-success' : delta.dir === 'up' ? 'text-warning' : 'text-secondary'}`}>{delta.text}</div>
                 )}
               </Card>
               <Card title="Last 7 days · active time">
@@ -163,7 +190,7 @@ export function Applications(): JSX.Element {
                 onChanged={() => {
                   detail.refresh()
                   all.refresh()
-                  apps.refresh()
+                  yearApps.refresh()
                 }}
               />
             </>

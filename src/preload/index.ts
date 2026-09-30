@@ -26,8 +26,11 @@ import type {
   TimelineSegment,
   TrackerStatus,
   Transition,
-  UpdateStatus,
-  WeeklyReport
+  WeeklyReport,
+  YearApps,
+  YearlyReport,
+  DayTypeMix,
+  Records
 } from '../shared/types'
 
 const EVENTS = EVENT_CHANNELS
@@ -46,9 +49,14 @@ const api = {
     ipcRenderer.invoke('transitions:day', day, limit),
   listApps: (): Promise<AppInfo[]> => ipcRenderer.invoke('apps:list'),
   appDetail: (appId: number, day: string): Promise<AppDetail | null> => ipcRenderer.invoke('apps:detail', appId, day),
+  /** Every application with its totals for a year, up to yesterday. */
+  yearApps: (year: number): Promise<YearApps> => ipcRenderer.invoke('apps:year', year),
   renameApp: (id: number, name: string): Promise<void> => ipcRenderer.invoke('apps:rename', id, name),
   hideApp: (id: number, hidden: boolean): Promise<void> => ipcRenderer.invoke('apps:hide', id, hidden),
   monthly: (month: string): Promise<MonthlyReport> => ipcRenderer.invoke('report:monthly', month),
+  yearly: (year: number): Promise<YearlyReport> => ipcRenderer.invoke('report:yearly', year),
+  dayTypeMix: (fromDay: string, toDay: string): Promise<DayTypeMix> => ipcRenderer.invoke('report:dayTypeMix', fromDay, toDay),
+  records: (): Promise<Records> => ipcRenderer.invoke('report:records'),
   listCategories: (): Promise<Category[]> => ipcRenderer.invoke('categories:list'),
   addCategory: (name: string, color: string): Promise<Category> => ipcRenderer.invoke('categories:add', name, color),
   updateCategory: (id: number, name: string, color: string): Promise<void> => ipcRenderer.invoke('categories:update', id, name, color),
@@ -89,10 +97,8 @@ const api = {
   /** Folds days older than the retention window into daily totals right now. */
   compactData: (): Promise<CompactResult> => ipcRenderer.invoke('data:compact'),
 
-  updateStatus: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:status'),
-  checkForUpdates: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:check'),
-  downloadUpdate: (): Promise<UpdateStatus> => ipcRenderer.invoke('update:download'),
-  installUpdate: (): Promise<void> => ipcRenderer.invoke('update:install'),
+  /** Opens the Microsoft Store, which checks for and installs updates to this app. */
+  openStore: (): Promise<void> => ipcRenderer.invoke('store:open'),
   openDataFolder: (): Promise<void> => ipcRenderer.invoke('data:openFolder'),
   exportData: (): Promise<boolean> => ipcRenderer.invoke('data:export'),
   clearData: (): Promise<boolean> => ipcRenderer.invoke('data:clear'),

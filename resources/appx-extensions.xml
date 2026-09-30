@@ -1,0 +1,6 @@
+
+        <!-- Launch at startup for the Store build. Enabled on install; the app toggles it through the StartupTask API
+             (src/main/startupTask.ts) and the user can also flip it in Task Manager > Startup apps. -->
+        <desktop:Extension Category="windows.startupTask" Executable="app\ScreenWise.exe" EntryPoint="Windows.FullTrustApplication">
+          <desktop:StartupTask TaskId="ScreenWiseStartup" Enabled="true" DisplayName="ScreenWise" />
+        </desktop:Extension>

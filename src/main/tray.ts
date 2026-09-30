@@ -47,10 +47,10 @@ export class AppTray {
     const time = fmt(s.todayScreenMs)
     this.tray.setImage(paused ? this.iconOff : this.iconOn)
     this.tray.setToolTip(
-      this.actions.showTrayTime() ? `DeskTime · ${time} today${paused ? ' · paused' : ''}` : 'DeskTime'
+      this.actions.showTrayTime() ? `ScreenWise · ${time} today${paused ? ' · paused' : ''}` : 'ScreenWise'
     )
     const menu = Menu.buildFromTemplate([
-      { label: 'DeskTime', enabled: false },
+      { label: 'ScreenWise', enabled: false },
       { label: this.actions.showTrayTime() ? `Screen time  ${time}` : 'Tracking active', enabled: false },
       { type: 'separator' },
       { label: 'Open Dashboard', click: this.actions.onOpen },
@@ -67,7 +67,7 @@ export class AppTray {
   /** Windows 11 hides new tray icons in the overflow area; point this out once. */
   showFirstRunHint(): void {
     this.tray.displayBalloon({
-      title: 'DeskTime is running in the tray',
+      title: 'ScreenWise is running in the tray',
       content: 'Drag this icon out of the hidden-icons area to keep screen time one click away.',
       iconType: 'custom',
       icon: nativeImage.createFromPath(resourcePath('icon.png'))

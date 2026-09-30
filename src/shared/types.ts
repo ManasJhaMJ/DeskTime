@@ -39,8 +39,6 @@ export interface Settings {
    * (reports and averages keep working; timelines for those days are gone). 0 keeps everything forever.
    */
   retentionMonths: number
-  /** Ask GitHub Releases for a newer version at startup and every few hours. The only network call the app makes. */
-  autoUpdateCheck: boolean
   /**
    * Hour (0-6) at which a new day begins. Use before this hour counts toward the previous day, so a night owl's
    * 1 AM session lands on the evening it belongs to. Changing it re-files recorded sessions.
@@ -87,7 +85,7 @@ export interface Appearance {
 export const DEFAULT_APPEARANCE: Appearance = {
   darkBase: 'forest',
   lightBase: 'cool',
-  accent: 'coral',
+  accent: 'amber',
   radius: 'rounded',
   motion: 'full',
   font: 'system'
@@ -95,7 +93,7 @@ export const DEFAULT_APPEARANCE: Appearance = {
 
 export const DEFAULT_SETTINGS: Settings = {
   idleThresholdSec: 60,
-  launchAtStartup: false,
+  launchAtStartup: true,
   startMinimized: true,
   notificationsEnabled: true,
   breakRemindersEnabled: false,
@@ -116,10 +114,9 @@ export const DEFAULT_SETTINGS: Settings = {
   onboardingDone: false,
   theme: 'system',
   appearance: DEFAULT_APPEARANCE,
-  retentionMonths: 12,
-  autoUpdateCheck: true,
+  retentionMonths: 0,
   dayStartHour: 0,
-  avatar: 'ghost',
+  avatar: 'cat',
   avatarPhoto: null,
   avatarSleeps: 'time',
   streakRemindersEnabled: true,
@@ -167,21 +164,6 @@ export interface CompactResult {
   sessions: number
 }
 
-export type UpdateState = 'disabled' | 'idle' | 'checking' | 'not-available' | 'available' | 'downloading' | 'downloaded' | 'error'
-
-export interface UpdateStatus {
-  state: UpdateState
-  /** Version offered by the feed when state is available, downloading or downloaded. */
-  version: string | null
-  /** Download progress 0..100 while downloading. */
-  percent: number
-  /** Last check time, epoch ms. */
-  checkedAt: number | null
-  error: string | null
-  /** Why checks are off: not packaged, or turned off in Settings. */
-  reason: string | null
-}
-
 export interface AppInfo {
   id: number
   exePath: string
@@ -223,6 +205,23 @@ export interface AppUsage extends AppInfo {
   listeningMs: number
   sessions: number
   longestMs: number
+}
+
+/** One app's totals for a calendar year, up to yesterday. */
+export interface YearAppUsage extends AppInfo {
+  activeMs: number
+  /** Idle in front plus listening. */
+  idleMs: number
+  listeningMs: number
+  /** Days on which the app was used at all. */
+  days: number
+}
+
+export interface YearApps {
+  year: number
+  /** Last day included in the totals. Today is folded in after midnight. Null when the year has no finished day yet. */
+  throughDay: string | null
+  apps: YearAppUsage[]
 }
 
 export interface DaySummary {
@@ -377,9 +376,71 @@ export interface MonthlyReport {
   topApps: { id: number; name: string; icon: string | null; activeMs: number }[]
 }
 
+export interface MonthPoint {
+  month: string // YYYY-MM
+  screenMs: number
+  activeMs: number
+  idleMs: number
+  activeDays: number
+}
+
+export interface YearlyReport {
+  year: number
+  /** Always twelve entries, empty months included. */
+  months: MonthPoint[]
+  /** Only days with data. */
+  days: DailyPoint[]
+  totalMs: number
+  activeMs: number
+  idleMs: number
+  activeDays: number
+  busiestDay: DailyPoint | null
+  busiestMonth: MonthPoint | null
+  /** Average screen time per weekday, Monday first, over days with data. */
+  weekdayAvg: number[]
+  topApps: { id: number; name: string; icon: string | null; activeMs: number }[]
+}
+
+export interface DayTypeApp {
+  id: number
+  name: string
+  icon: string | null
+  activeMs: number
+  /** Active time divided by the days of that type with any use. */
+  perDayMs: number
+}
+
+/** Top applications split by weekdays and weekends over a range. */
+export interface DayTypeMix {
+  weekdayDays: number
+  weekendDays: number
+  weekday: DayTypeApp[]
+  weekend: DayTypeApp[]
+}
+
+export interface DayRecord {
+  day: string
+  /** Milliseconds, a count, or a timestamp, depending on the record. */
+  value: number
+}
+
+/** All-time personal records; each names the day it happened on. */
+export interface Records {
+  longestDay: DayRecord | null
+  mostActiveDay: DayRecord | null
+  longestSession: (DayRecord & { start: number }) | null
+  mostSwitches: DayRecord | null
+  /** value is the timestamp of the first activity. */
+  earliestStart: DayRecord | null
+  /** value is the timestamp of the last activity. */
+  latestFinish: DayRecord | null
+}
+
 export interface LoginStatus {
   openAtLogin: boolean
   supported: boolean
+  /** Why the setting could not be applied, e.g. turned off in Task Manager (Store build only). */
+  reason: string | null
 }
 
 export interface Insights {
@@ -443,5 +504,5 @@ export interface Diagnostics {
 
 export type Page = 'overview' | 'timeline' | 'apps' | 'focus' | 'limits' | 'streaks' | 'reports' | 'settings'
 
-export const EVENT_CHANNELS = ['tracker:status', 'focus:update', 'navigate', 'apps:changed', 'data:changed', 'theme:changed', 'update:status'] as const
+export const EVENT_CHANNELS = ['tracker:status', 'focus:update', 'navigate', 'apps:changed', 'data:changed', 'theme:changed'] as const
 export type EventChannel = (typeof EVENT_CHANNELS)[number]

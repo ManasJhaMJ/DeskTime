@@ -314,8 +314,9 @@ const FRIENDLY: Record<string, string> = {
   'shellexperiencehost.exe': 'Windows Shell',
   'taskmgr.exe': 'Task Manager',
   'systemsettings.exe': 'Settings',
-  'electron.exe': 'DeskTime (dev)',
-  'desktime.exe': 'DeskTime'
+  'electron.exe': 'ScreenWise (dev)',
+  'screenwise.exe': 'ScreenWise',
+  'desktime.exe': 'ScreenWise'
 }
 
 /** Default category per executable; anything not listed starts uncategorized. */

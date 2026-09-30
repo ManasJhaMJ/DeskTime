@@ -7,13 +7,13 @@
 # A self-signed certificate proves the pipeline works, but Windows SmartScreen will still warn on other
 # machines. For a warning-free installer you need a certificate from a public CA (see README, "Code signing").
 param(
-  [string]$Subject = "CN=DeskTime Dev Signing",
+  [string]$Subject = "CN=ScreenWise Dev Signing",
   [string]$OutDir = "$PSScriptRoot\..\certs",
-  [string]$Password = "desktime-dev"
+  [string]$Password = "screenwise-dev"
 )
 $ErrorActionPreference = 'Stop'
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$pfx = Join-Path $OutDir 'desktime-dev.pfx'
+$pfx = Join-Path $OutDir 'screenwise-dev.pfx'
 
 $cert = Get-ChildItem Cert:\CurrentUser\My | Where-Object { $_.Subject -eq $Subject } | Select-Object -First 1
 if (-not $cert) {

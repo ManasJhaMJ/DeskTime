@@ -43,7 +43,7 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
         <div className="flex items-center gap-3">
           <img src={logo} alt="" className="w-10 h-10 select-none" draggable={false} />
           <div>
-            <div className="text-[20px] font-semibold tracking-tight">Welcome to DeskTime</div>
+            <div className="text-[20px] font-semibold tracking-tight">Welcome to ScreenWise</div>
             <div className="text-secondary text-[13px]">How you actually spend your time on this PC, kept on this PC.</div>
           </div>
         </div>
@@ -99,7 +99,6 @@ export function Onboarding({ settings, onDone }: { settings: Settings; onDone: (
                   key={p.id}
                   type="button"
                   aria-label={p.name}
-                  title={p.name}
                   onClick={() => {
                     setAccent(p.id)
                     preview(theme, p.id)

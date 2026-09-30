@@ -65,7 +65,7 @@ export const log = {
  */
 export function initLogging(userData: string): void {
   dir = join(userData, 'logs')
-  file = join(dir, 'desktime.log')
+  file = join(dir, 'screenwise.log')
   try {
     mkdirSync(dir, { recursive: true })
     ready = true
@@ -102,7 +102,7 @@ export function initLogging(userData: string): void {
   app.on('will-quit', () => write('info', ['quit']))
 
   write('info', [
-    `start DeskTime ${app.getVersion()} electron=${process.versions.electron} node=${process.versions.node} ` +
+    `start ScreenWise ${app.getVersion()} electron=${process.versions.electron} node=${process.versions.node} ` +
       `os=${process.getSystemVersion()} arch=${process.arch} packaged=${app.isPackaged}`
   ])
 }

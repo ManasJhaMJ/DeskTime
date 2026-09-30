@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { AnimatePresence, motion } from 'framer-motion'
 import { Check, ChevronDown } from 'lucide-react'
 import { colorForApp } from '@/lib/palette'
@@ -430,6 +431,62 @@ export function Empty({ title, hint }: { title: string; hint?: string }): JSX.El
       <div className="text-secondary">{title}</div>
       {hint && <div className="text-muted text-[12.5px] mt-1">{hint}</div>}
     </div>
+  )
+}
+
+/** Instant label above the wrapped control on hover or focus; replaces the slow native title tooltip. */
+export function Tooltip({ text, children, className = '' }: { text: string; children: ReactNode; className?: string }): JSX.Element {
+  return (
+    <span className={`has-tip relative inline-flex ${className}`}>
+      {children}
+      <span className="tip" aria-hidden>
+        {text}
+      </span>
+    </span>
+  )
+}
+
+/** Centered dialog over a dimmed page. Escape, the backdrop and onClose all dismiss it. */
+export function Modal({ open, onClose, title, children, width = 460 }: { open: boolean; onClose: () => void; title?: string; children: ReactNode; width?: number }): JSX.Element {
+  useEffect(() => {
+    if (!open) return
+    const esc = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onClose()
+    }
+    document.addEventListener('keydown', esc)
+    return () => document.removeEventListener('keydown', esc)
+  }, [open, onClose])
+  return createPortal(
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          key="modal"
+          className="fixed inset-0 z-50 grid place-items-center p-6"
+          style={{ background: 'var(--overlay)', backdropFilter: 'blur(6px)' }}
+          initial={STATIC ? false : { opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={STATIC ? undefined : { opacity: 0, transition: { duration: 0.12 } }}
+          transition={{ duration: 0.18 }}
+          onMouseDown={(e) => e.target === e.currentTarget && onClose()}
+        >
+          <motion.div
+            role="dialog"
+            aria-modal="true"
+            aria-label={title}
+            className="card p-6 shadow-xl max-w-[92vw]"
+            style={{ width }}
+            initial={STATIC ? false : { opacity: 0, y: 12, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={STATIC ? undefined : { opacity: 0, y: 8, scale: 0.98, transition: { duration: 0.12 } }}
+            transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+          >
+            {title && <h3 className="text-[16px] font-semibold tracking-tight mb-3">{title}</h3>}
+            {children}
+          </motion.div>
+        </motion.div>
+      )}
+    </AnimatePresence>,
+    document.body
   )
 }
 

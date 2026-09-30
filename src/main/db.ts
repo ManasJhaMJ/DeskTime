@@ -22,7 +22,14 @@ import type {
   StreakKind,
   TimelineSegment,
   Transition,
-  WeeklyReport
+  WeeklyReport,
+  YearApps,
+  YearlyReport,
+  MonthPoint,
+  DayTypeMix,
+  DayTypeApp,
+  Records,
+  DayRecord
 } from '../shared/types'
 import { DEFAULT_SETTINGS } from '../shared/types'
 import { DEFAULT_CATEGORIES, familyFromWindowsAppsPath, friendlyName, SYSTEM_PROCESSES } from './win32'
@@ -171,6 +178,34 @@ function transitions(rows: SessionRow[]): Map<string, Transition> {
   return map
 }
 
+/** Today's figures in record form, so they can compete with the cached history. */
+function recordsFromSummary(s: DaySummary): Records {
+  const rec = (v: number): DayRecord | null => (v > 0 ? { day: s.day, value: v } : null)
+  return {
+    longestDay: rec(s.screenMs),
+    mostActiveDay: rec(s.activeMs),
+    longestSession: s.longestSessionStart !== null && s.longestSessionMs > 0 ? { day: s.day, value: s.longestSessionMs, start: s.longestSessionStart } : null,
+    mostSwitches: rec(s.switches),
+    earliestStart: s.firstActivity !== null ? { day: s.day, value: s.firstActivity } : null,
+    latestFinish: s.lastActivity !== null ? { day: s.day, value: s.lastActivity } : null
+  }
+}
+
+function mergeRecords(a: Records, b: Records): Records {
+  const max = <T extends DayRecord>(x: T | null, y: T | null): T | null => (!x ? y : !y ? x : y.value > x.value ? y : x)
+  const clock = (r: DayRecord): number => r.value - dayStart(r.day)
+  const earliest = (x: DayRecord | null, y: DayRecord | null): DayRecord | null => (!x ? y : !y ? x : clock(y) < clock(x) ? y : x)
+  const latest = (x: DayRecord | null, y: DayRecord | null): DayRecord | null => (!x ? y : !y ? x : clock(y) > clock(x) ? y : x)
+  return {
+    longestDay: max(a.longestDay, b.longestDay),
+    mostActiveDay: max(a.mostActiveDay, b.mostActiveDay),
+    longestSession: max(a.longestSession, b.longestSession),
+    mostSwitches: max(a.mostSwitches, b.mostSwitches),
+    earliestStart: earliest(a.earliestStart, b.earliestStart),
+    latestFinish: latest(a.latestFinish, b.latestFinish)
+  }
+}
+
 function splitByHour(start: number, end: number, fn: (hour: number, ms: number) => void): void {
   let t = start
   while (t < end) {
@@ -185,6 +220,16 @@ function splitByHour(start: number, end: number, fn: (hour: number, ms: number) 
 export class DB {
   readonly db: Database.Database
   private readonly file: string
+  /** Per-app year totals up to yesterday, keyed by range. Recomputed once a day or after data moves. */
+  private readonly yearCache = new Map<string, Map<number, { active: number; idle: number; listening: number; days: number }>>()
+  /** All-time records for days before today; today is merged in live. */
+  private recordsCache: { day: string; data: Records } | null = null
+
+  /** Drops derived caches after recorded data moved (compaction, merges, day-start change, clearing). */
+  private dropCaches(): void {
+    this.yearCache.clear()
+    this.recordsCache = null
+  }
 
   constructor(file: string) {
     this.file = file
@@ -387,6 +432,7 @@ export class DB {
       )
       .run(target, source)
     this.db.prepare('DELETE FROM daily_totals WHERE app_id = ?').run(source)
+    this.dropCaches()
     this.db.prepare('UPDATE apps SET merged_into = ? WHERE merged_into = ?').run(target, source)
     this.db.prepare('DELETE FROM limits WHERE app_id = ? AND EXISTS (SELECT 1 FROM limits WHERE app_id = ?)').run(source, target)
     this.db.prepare('UPDATE limits SET app_id = ? WHERE app_id = ?').run(target, source)
@@ -1079,6 +1125,188 @@ export class DB {
     }
   }
 
+  /**
+   * Every visible application with its totals for one calendar year, up to yesterday. Today is left out on purpose:
+   * the sum is computed once per day (first request after midnight) and served from memory afterwards, so the
+   * Applications page never re-adds a year of sessions on every refresh.
+   */
+  yearApps(year: number): YearApps {
+    const t = today()
+    const first = `${year}-01-01`
+    const last = `${year}-12-31`
+    const through = last < t ? last : addDays(t, -1)
+    const apps = this.listApps().filter((a) => !a.hidden && a.mergedInto === null)
+    const zero = { active: 0, idle: 0, listening: 0, days: 0 }
+    let totals: Map<number, typeof zero> | undefined
+    if (through >= first) {
+      const key = `${first}:${through}`
+      totals = this.yearCache.get(key)
+      if (!totals) {
+        this.yearCache.clear()
+        const rows = this.db
+          .prepare(
+            `SELECT e.id, SUM(u.active) AS active, SUM(u.idle) AS idle, SUM(u.listening) AS listening, COUNT(DISTINCT u.day) AS days FROM (
+               SELECT day, app_id, CASE WHEN is_idle IN (0, 2) THEN end_ts - start_ts ELSE 0 END AS active,
+                      CASE WHEN is_idle = 1 THEN end_ts - start_ts ELSE 0 END AS idle,
+                      CASE WHEN is_idle = 3 THEN end_ts - start_ts ELSE 0 END AS listening FROM sessions WHERE day BETWEEN ? AND ?
+               UNION ALL
+               SELECT day, app_id, active, idle, listening FROM daily_totals WHERE day BETWEEN ? AND ?
+             ) u JOIN apps a ON a.id = u.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id) GROUP BY e.id`
+          )
+          .all(first, through, first, through) as { id: number; active: number; idle: number; listening: number; days: number }[]
+        totals = new Map(rows.map((r) => [r.id, { active: r.active, idle: r.idle, listening: r.listening, days: r.days }]))
+        this.yearCache.set(key, totals)
+      }
+    }
+    const out = apps.map((a) => {
+      const u = totals?.get(a.id) ?? zero
+      return { ...a, activeMs: u.active, idleMs: u.idle + u.listening, listeningMs: u.listening, days: u.days }
+    })
+    out.sort((a, b) => b.activeMs + b.idleMs - (a.activeMs + a.idleMs) || a.displayName.localeCompare(b.displayName))
+    return { year, throughDay: through >= first ? through : null, apps: out }
+  }
+
+  yearly(year: number): YearlyReport {
+    const first = `${year}-01-01`
+    const last = `${year}-12-31`
+    const rows = this.stmts.rangeDaily.all(first, last, first, last) as { day: string; active: number; idle: number }[]
+    const days: DailyPoint[] = rows.map((r) => ({ day: r.day, activeMs: r.active, idleMs: r.idle, screenMs: r.active + r.idle }))
+    const months: MonthPoint[] = Array.from({ length: 12 }, (_, i) => ({ month: `${year}-${pad(i + 1)}`, screenMs: 0, activeMs: 0, idleMs: 0, activeDays: 0 }))
+    const wdSum = new Array<number>(7).fill(0)
+    const wdN = new Array<number>(7).fill(0)
+    let totalMs = 0
+    let activeMs = 0
+    let idleMs = 0
+    let activeDays = 0
+    let busiestDay: DailyPoint | null = null
+    for (const d of days) {
+      const m = months[Number(d.day.slice(5, 7)) - 1]
+      m.screenMs += d.screenMs
+      m.activeMs += d.activeMs
+      m.idleMs += d.idleMs
+      totalMs += d.screenMs
+      activeMs += d.activeMs
+      idleMs += d.idleMs
+      if (d.screenMs <= 0) continue
+      m.activeDays++
+      activeDays++
+      const dow = (new Date(dayStart(d.day)).getDay() + 6) % 7
+      wdSum[dow] += d.screenMs
+      wdN[dow]++
+      if (!busiestDay || d.screenMs > busiestDay.screenMs) busiestDay = d
+    }
+    let busiestMonth: MonthPoint | null = null
+    for (const m of months) if (m.screenMs > 0 && (!busiestMonth || m.screenMs > busiestMonth.screenMs)) busiestMonth = m
+    const top = this.stmts.rangeApps.all(first, last, first, last, 8) as { id: number; display_name: string; icon: string | null; active: number }[]
+    return {
+      year,
+      months,
+      days,
+      totalMs,
+      activeMs,
+      idleMs,
+      activeDays,
+      busiestDay,
+      busiestMonth,
+      weekdayAvg: wdSum.map((s, i) => (wdN[i] ? Math.round(s / wdN[i]) : 0)),
+      topApps: top.map((t) => ({ id: t.id, name: t.display_name, icon: t.icon, activeMs: t.active }))
+    }
+  }
+
+  /** Top applications on weekdays against weekends, as averages per day of that type. */
+  dayTypeMix(fromDay: string, toDay_: string, limit = 5): DayTypeMix {
+    const rows = this.db
+      .prepare(
+        `SELECT u.day, e.id, e.display_name AS name, e.icon, SUM(u.active) AS active FROM (
+           SELECT day, app_id, CASE WHEN is_idle IN (0, 2) THEN end_ts - start_ts ELSE 0 END AS active FROM sessions WHERE day BETWEEN ? AND ?
+           UNION ALL
+           SELECT day, app_id, active FROM daily_totals WHERE day BETWEEN ? AND ?
+         ) u JOIN apps a ON a.id = u.app_id JOIN apps e ON e.id = COALESCE(a.merged_into, a.id)
+         WHERE e.hidden = 0 GROUP BY u.day, e.id`
+      )
+      .all(fromDay, toDay_, fromDay, toDay_) as { day: string; id: number; name: string; icon: string | null; active: number }[]
+    const acc = { weekday: new Map<number, DayTypeApp>(), weekend: new Map<number, DayTypeApp>() }
+    const days = { weekday: new Set<string>(), weekend: new Set<string>() }
+    for (const r of rows) {
+      if (r.active <= 0) continue
+      const dow = new Date(dayStart(r.day)).getDay()
+      const type = dow === 0 || dow === 6 ? 'weekend' : 'weekday'
+      days[type].add(r.day)
+      const a = acc[type].get(r.id) ?? { id: r.id, name: r.name, icon: r.icon, activeMs: 0, perDayMs: 0 }
+      a.activeMs += r.active
+      acc[type].set(r.id, a)
+    }
+    const top = (type: 'weekday' | 'weekend'): DayTypeApp[] => {
+      const n = Math.max(1, days[type].size)
+      return [...acc[type].values()]
+        .map((a) => ({ ...a, perDayMs: Math.round(a.activeMs / n) }))
+        .sort((x, y) => y.activeMs - x.activeMs)
+        .slice(0, limit)
+    }
+    return { weekdayDays: days.weekday.size, weekendDays: days.weekend.size, weekday: top('weekday'), weekend: top('weekend') }
+  }
+
+  /** All-time records. Days before today are scanned once per day and cached; today is merged in from its live summary. */
+  records(): Records {
+    const t = today()
+    if (!this.recordsCache || this.recordsCache.day !== t) this.recordsCache = { day: t, data: this.computeRecords(addDays(t, -1)) }
+    return mergeRecords(this.recordsCache.data, recordsFromSummary(this.daySummary(t)))
+  }
+
+  private computeRecords(through: string): Records {
+    const out: Records = { longestDay: null, mostActiveDay: null, longestSession: null, mostSwitches: null, earliestStart: null, latestFinish: null }
+    const daily = this.stmts.rangeDaily.all('0000-01-01', through, '0000-01-01', through) as { day: string; active: number; idle: number }[]
+    for (const d of daily) {
+      const screen = d.active + d.idle
+      if (screen > 0 && (!out.longestDay || screen > out.longestDay.value)) out.longestDay = { day: d.day, value: screen }
+      if (d.active > 0 && (!out.mostActiveDay || d.active > out.mostActiveDay.value)) out.mostActiveDay = { day: d.day, value: d.active }
+    }
+    // Recent days from raw sessions, one day at a time.
+    const rows = this.stmts.rangeSessions.all('0000-01-01', through) as SessionRow[]
+    const byDay = new Map<string, SessionRow[]>()
+    for (const r of rows) {
+      const list = byDay.get(r.day)
+      if (list) list.push(r)
+      else byDay.set(r.day, [r])
+    }
+    const consider = (day: string, longest: Stretch | null, switches: number, first: number | null, last: number | null): void => {
+      if (longest && (!out.longestSession || longest.end - longest.start > out.longestSession.value))
+        out.longestSession = { day, value: longest.end - longest.start, start: longest.start }
+      if (switches > 0 && (!out.mostSwitches || switches > out.mostSwitches.value)) out.mostSwitches = { day, value: switches }
+      const ds = dayStart(day)
+      if (first !== null && (!out.earliestStart || first - ds < out.earliestStart.value - dayStart(out.earliestStart.day))) out.earliestStart = { day, value: first }
+      if (last !== null && (!out.latestFinish || last - ds > out.latestFinish.value - dayStart(out.latestFinish.day))) out.latestFinish = { day, value: last }
+    }
+    for (const [day, list] of byDay) {
+      let longest: Stretch | null = null
+      for (const s of activeStretches(list)) if (!longest || s.end - s.start > longest.end - longest.start) longest = s
+      let switches = 0
+      for (const tr of transitions(list).values()) switches += tr.count
+      let first: number | null = null
+      let last: number | null = null
+      for (const r of list) {
+        if (r.is_idle === 1 || r.is_idle === 3) continue
+        if (first === null) first = r.start_ts
+        last = r.end_ts
+      }
+      consider(day, longest, switches, first, last)
+    }
+    // Compacted days keep their device-level figures in daily_summary.
+    const compacted = this.db.prepare('SELECT * FROM daily_summary WHERE day <= ?').all(through) as {
+      day: string
+      longest: number
+      longest_start: number | null
+      switches: number
+      first_activity: number | null
+      last_activity: number | null
+    }[]
+    for (const c of compacted) {
+      const longest = c.longest_start !== null && c.longest > 0 ? { start: c.longest_start, end: c.longest_start + c.longest } : null
+      consider(c.day, longest, c.switches, c.first_activity, c.last_activity)
+    }
+    return out
+  }
+
   insights(fromDay: string, toDay_: string): Insights {
     const rows = this.stmts.rangeSessions.all(fromDay, toDay_) as SessionRow[]
     const stretches = activeStretches(rows)
@@ -1229,6 +1457,7 @@ export class DB {
   }
 
   clearUsageData(): void {
+    this.dropCaches()
     this.db.exec('DELETE FROM sessions; DELETE FROM daily_totals; DELETE FROM daily_summary; DELETE FROM focus_sessions; VACUUM;')
   }
 
@@ -1270,6 +1499,7 @@ export class DB {
    * Sessions that straddle the boundary go by their start; compacted days are left as they were recorded.
    */
   reassignDays(): void {
+    this.dropCaches()
     const offsetSec = dayStartHour * 3600
     const tx = this.db.transaction(() => {
       this.db.prepare("UPDATE sessions SET day = strftime('%Y-%m-%d', start_ts / 1000 - ?, 'unixepoch', 'localtime')").run(offsetSec)
@@ -1438,6 +1668,7 @@ export class DB {
       sessions += delSessions.run(day).changes
     })
     for (const d of days) moveDay(d.day)
+    this.dropCaches()
 
     if (sessions > 0) {
       // Give the space back to the file system, at most once a week; the WAL checkpoint keeps the -wal file small.

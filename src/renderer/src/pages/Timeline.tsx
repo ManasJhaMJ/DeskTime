@@ -19,9 +19,10 @@ const TOP_APPS = 8
  * The detailed view of one day: every figure the Overview hints at, plus the lanes, the hourly shape,
  * category and application breakdowns, the most common switches and the raw activity log.
  */
-export function Timeline({ onOpenApps }: { onOpenApps: () => void }): JSX.Element {
+export function Timeline(): JSX.Element {
   const [day, setDay] = useState(today())
   const [selected, setSelected] = useState<TimelineSegment | null>(null)
+  const [allAppsOpen, setAllAppsOpen] = useState(false)
   const live = day === today()
   const fast = live ? 10_000 : 120_000
   const slow = live ? 30_000 : 120_000
@@ -79,13 +80,13 @@ export function Timeline({ onOpenApps }: { onOpenApps: () => void }): JSX.Elemen
   // Listening overlaps other apps' time, so it is left out of the share denominator.
   const appsTotal = allApps.reduce((sum, a) => sum + a.activeMs + a.idleMs - a.listeningMs, 0)
   const majorApps = allApps.filter((a) => a.activeMs + a.idleMs >= MINOR_APP_MS)
-  const topApps = majorApps.slice(0, TOP_APPS)
+  const topApps = allAppsOpen ? allApps : majorApps.slice(0, TOP_APPS)
   const restApps = allApps.filter((a) => !topApps.includes(a))
   const restMs = restApps.reduce((sum, a) => sum + a.activeMs + a.idleMs, 0)
 
   return (
     <Page>
-      <PageHeader title="Timeline" subtitle="How the day unfolded, hour by hour. Scroll over the lanes to zoom, shift+scroll to pan." right={<DayNav day={day} onChange={setDay} />} />
+      <PageHeader title="Timeline" subtitle="Everything about one day: how it unfolded, and where the time went." right={<DayNav day={day} onChange={setDay} />} />
 
       <div className="grid grid-cols-4 gap-3 mb-3">
         <StatTile
@@ -182,20 +183,13 @@ export function Timeline({ onOpenApps }: { onOpenApps: () => void }): JSX.Elemen
             ) : undefined
           }
         >
-          {hasHourly && insights.data ? <HourlyStrip hourly={insights.data.hourly} /> : <Empty title="No activity recorded" />}
+          {hasHourly && insights.data ? <HourlyStrip hourly={insights.data.hourly} height={120} /> : <Empty title="No activity recorded" />}
         </Card>
         <CategoryBreakdown cats={categories.data ?? []} hint="Assign categories on the Applications page." />
       </div>
 
       <div className="grid grid-cols-[minmax(0,1fr)_360px] gap-3 mb-3">
-        <Card
-          title="By application"
-          right={
-            <button className="text-[12.5px] text-secondary hover:text-primary transition-colors" onClick={onOpenApps}>
-              All applications →
-            </button>
-          }
-        >
+        <Card title="By application">
           {allApps.length === 0 ? (
             <Empty title="No applications recorded" />
           ) : (
@@ -224,13 +218,11 @@ export function Timeline({ onOpenApps }: { onOpenApps: () => void }): JSX.Elemen
                   </li>
                 )
               })}
-              {restApps.length > 0 && (
+              {(restApps.length > 0 || allAppsOpen) && (
                 <li>
-                  <button className="w-full flex items-center justify-between py-2.5 text-[12.5px] text-secondary hover:text-primary transition-colors" onClick={onOpenApps}>
-                    <span>
-                      +{restApps.length} more application{restApps.length === 1 ? '' : 's'}
-                    </span>
-                    <span className="num">{fmtDuration(restMs)}</span>
+                  <button className="w-full flex items-center justify-between py-2.5 text-[12.5px] text-secondary hover:text-primary transition-colors" onClick={() => setAllAppsOpen((v) => !v)}>
+                    <span>{allAppsOpen ? 'Show fewer' : `+${restApps.length} more application${restApps.length === 1 ? '' : 's'}`}</span>
+                    {!allAppsOpen && <span className="num">{fmtDuration(restMs)}</span>}
                   </button>
                 </li>
               )}

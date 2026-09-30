@@ -1,27 +1,31 @@
 import { app, BrowserWindow, dialog, ipcMain, nativeTheme, Notification, powerMonitor, shell } from 'electron'
 import { dirname, join } from 'path'
 import { copyFileSync, existsSync, mkdirSync, renameSync } from 'fs'
-import { release } from 'os'
+import { release, uptime } from 'os'
 import { writeFile } from 'fs/promises'
 import { addDays, DB, setDayStartHour, toDay, today } from './db'
 import { evaluateStreak } from './streaks'
 import { Tracker } from './tracker'
 import { Guardian } from './guardian'
+import { setStartupTask, startupTaskState } from './startupTask'
 import { AppTray, resourcePath } from './tray'
 import { initLogging, log } from './logger'
-import { Updater } from './updater'
 import type { CompactResult, LimitMode, LoginStatus, Page, Settings, StreakKind } from '../shared/types'
 import { FREEZES_PER_MONTH } from '../shared/types'
 import { screen } from 'electron'
 
-const APP_ID = 'com.desktime.app'
+const APP_ID = 'com.screenwise.app'
 const HIDDEN_ARG = '--hidden'
-const START_HIDDEN = process.argv.includes(HIDDEN_ARG)
-// Dev only: DESKTIME_CAPTURE="page:out.png" renders that page offscreen, saves a PNG and quits.
-const CAPTURE = process.env.DESKTIME_CAPTURE
-// Dev only: DESKTIME_USER_DATA=<dir> uses a scratch profile (own database and single-instance lock), so a
+/** Running from the Microsoft Store package (MSIX). Startup registration and the data folder differ there. */
+const IS_STORE = !!process.windowsStore
+// The Store's startup task launches the exe with no arguments, so a Store launch in the first minutes after boot is
+// taken to be the startup task and honours "Start minimized".
+const START_HIDDEN = process.argv.includes(HIDDEN_ARG) || (IS_STORE && uptime() < 180)
+// Dev only: SCREENWISE_CAPTURE="page:out.png" renders that page offscreen, saves a PNG and quits.
+const CAPTURE = process.env.SCREENWISE_CAPTURE
+// Dev only: SCREENWISE_USER_DATA=<dir> uses a scratch profile (own database and single-instance lock), so a
 // test launch never touches the installed app's data or gets blocked by its lock.
-if (process.env.DESKTIME_USER_DATA && !app.isPackaged) app.setPath('userData', process.env.DESKTIME_USER_DATA)
+if (process.env.SCREENWISE_USER_DATA && !app.isPackaged) app.setPath('userData', process.env.SCREENWISE_USER_DATA)
 
 // Single instance: a second launch just surfaces the dashboard.
 if (!app.requestSingleInstanceLock()) {
@@ -31,16 +35,20 @@ if (!app.requestSingleInstanceLock()) {
 }
 
 /**
- * The app used to be called Wellbeing. Move its data folder to the new name once, then always
- * use the new location.
+ * The app was called Wellbeing, then DeskTime. On first start under the new name, copy the newest old data folder
+ * over once, then always use the new location.
  */
 function migrateDataDir(): string {
   const dir = app.getPath('userData')
-  const file = join(dir, 'desktime.db')
+  const file = join(dir, 'screenwise.db')
   if (existsSync(file)) return file
-  const oldDir = join(dirname(dir), 'Wellbeing')
-  const oldFile = join(oldDir, 'wellbeing.db')
-  if (existsSync(oldFile)) {
+  const previous: [string, string][] = [
+    ['DeskTime', 'desktime.db'],
+    ['Wellbeing', 'wellbeing.db']
+  ]
+  for (const [oldName, oldDb] of previous) {
+    const oldFile = join(dirname(dir), oldName, oldDb)
+    if (!existsSync(oldFile)) continue
     try {
       mkdirSync(dir, { recursive: true })
       for (const suffix of ['', '-wal', '-shm']) {
@@ -50,13 +58,14 @@ function migrateDataDir(): string {
     } catch (err) {
       console.error('[migrate] could not move old data', err)
     }
+    break
   }
   return file
 }
 
 function main(): void {
   app.setAppUserModelId(APP_ID)
-  app.setName('DeskTime')
+  app.setName('ScreenWise')
   initLogging(app.getPath('userData'))
 
   const dbPath = migrateDataDir()
@@ -151,11 +160,10 @@ function main(): void {
   tracker.on('status', () => send('tracker:status', tracker.getStatus()))
   tracker.on('apps-changed', () => send('apps:changed'))
 
-  const updater = new Updater(
-    () => settings.autoUpdateCheck,
-    (s) => send('update:status', s),
-    (version) => notify('Update available', `DeskTime ${version} is ready to download from Settings > About.`, 'settings')
-  )
+  // Updates arrive through the Microsoft Store. "Check in Store" opens the app's listing (or the Store's updates page
+  // until the Store ID is known); the app itself makes no network requests.
+  const STORE_PRODUCT_ID = ''
+  const storeUrl = (): string => (STORE_PRODUCT_ID ? `ms-windows-store://pdp/?productid=${STORE_PRODUCT_ID}` : 'ms-windows-store://downloadsandupdates')
 
   // ---- retention: fold days older than the window into daily totals -------
   const RETENTION_EVERY_MS = 6 * 3_600_000
@@ -204,7 +212,7 @@ function main(): void {
       show: false,
       backgroundColor: material ? '#00000000' : chrome().bg,
       ...(material ? { backgroundMaterial: material } : {}),
-      title: 'DeskTime',
+      title: 'ScreenWise',
       icon: resourcePath('icon.ico'),
       titleBarStyle: 'hidden',
       titleBarOverlay: { color: chrome().bg, symbolColor: chrome().symbol, height: overlayHeight() },
@@ -303,6 +311,10 @@ function main(): void {
   }
 
   function applyLoginItem(): void {
+    if (IS_STORE) {
+      void setStartupTask(settings.launchAtStartup).then((state) => log.info('[startup] task', settings.launchAtStartup ? 'enable' : 'disable', '->', state))
+      return
+    }
     try {
       // Remove the entry written under the old product name, if any.
       app.setLoginItemSettings({ openAtLogin: false, name: 'Wellbeing' })
@@ -316,12 +328,26 @@ function main(): void {
     }
   }
 
-  function loginStatus(): LoginStatus {
+  async function loginStatus(): Promise<LoginStatus> {
+    if (IS_STORE) {
+      const state = await startupTaskState()
+      if (state === null) return { openAtLogin: false, supported: false, reason: 'Could not read the startup task state.' }
+      return {
+        openAtLogin: state === 'Enabled' || state === 'EnabledByPolicy',
+        supported: true,
+        reason:
+          state === 'DisabledByUser'
+            ? 'Turned off in Task Manager > Startup apps. Enable ScreenWise there to turn it back on.'
+            : state === 'DisabledByPolicy'
+              ? 'Blocked by a system policy.'
+              : null
+      }
+    }
     try {
       const s = app.getLoginItemSettings({ path: process.execPath, args: loginItemArgs() })
-      return { openAtLogin: s.openAtLogin, supported: true }
+      return { openAtLogin: s.openAtLogin, supported: true, reason: null }
     } catch {
-      return { openAtLogin: false, supported: false }
+      return { openAtLogin: false, supported: false, reason: null }
     }
   }
 
@@ -334,10 +360,10 @@ function main(): void {
     const page = spec.slice(0, sep) as Page
     const file = spec.slice(sep + 1)
     const isPopup = (page as string) === 'popup'
-    if (process.env.DESKTIME_CAPTURE_THEME) nativeTheme.themeSource = process.env.DESKTIME_CAPTURE_THEME as 'light' | 'dark'
+    if (process.env.SCREENWISE_CAPTURE_THEME) nativeTheme.themeSource = process.env.SCREENWISE_CAPTURE_THEME as 'light' | 'dark'
     const w = new BrowserWindow({
       width: isPopup ? 300 : 1180,
-      height: isPopup ? 190 : Number(process.env.DESKTIME_CAPTURE_H ?? 780),
+      height: isPopup ? 190 : Number(process.env.SCREENWISE_CAPTURE_H ?? 780),
       show: false,
       backgroundColor: chrome().bg,
       webPreferences: {
@@ -353,9 +379,9 @@ function main(): void {
         ...rendererFlags(),
         static: '1',
         page,
-        ...(process.env.DESKTIME_CAPTURE_SCROLL ? { shift: process.env.DESKTIME_CAPTURE_SCROLL } : {}),
-        ...(process.env.DESKTIME_CAPTURE_TAB ? { tab: process.env.DESKTIME_CAPTURE_TAB } : {}),
-        ...(process.env.DESKTIME_CAPTURE_ONBOARDING ? { onboarding: '1' } : {}),
+        ...(process.env.SCREENWISE_CAPTURE_SCROLL ? { shift: process.env.SCREENWISE_CAPTURE_SCROLL } : {}),
+        ...(process.env.SCREENWISE_CAPTURE_TAB ? { tab: process.env.SCREENWISE_CAPTURE_TAB } : {}),
+        ...(process.env.SCREENWISE_CAPTURE_ONBOARDING ? { onboarding: '1' } : {}),
         ...(isDark() ? { dark: '1' } : {}),
         ...(isPopup ? { popup: '1' } : {})
       }
@@ -363,19 +389,19 @@ function main(): void {
     await new Promise((r) => setTimeout(r, 600))
     w.webContents.send('navigate', page)
     await new Promise((r) => setTimeout(r, 2500))
-    // Dev only: DESKTIME_CAPTURE_JS runs a script in the page (async allowed) and prints its result before the shot.
-    if (process.env.DESKTIME_CAPTURE_JS) {
+    // Dev only: SCREENWISE_CAPTURE_JS runs a script in the page (async allowed) and prints its result before the shot.
+    if (process.env.SCREENWISE_CAPTURE_JS) {
       try {
-        console.log('js:', JSON.stringify(await w.webContents.executeJavaScript(process.env.DESKTIME_CAPTURE_JS, true)))
+        console.log('js:', JSON.stringify(await w.webContents.executeJavaScript(process.env.SCREENWISE_CAPTURE_JS, true)))
       } catch (err) {
         console.log('js error:', String(err))
       }
-      await new Promise((r) => setTimeout(r, Number(process.env.DESKTIME_CAPTURE_JS_WAIT ?? 1500)))
+      await new Promise((r) => setTimeout(r, Number(process.env.SCREENWISE_CAPTURE_JS_WAIT ?? 1500)))
     }
 
     const img = await w.webContents.capturePage()
     await writeFile(file, img.toPNG())
-    if (process.env.DESKTIME_CAPTURE_TEXT) {
+    if (process.env.SCREENWISE_CAPTURE_TEXT) {
       console.log(await w.webContents.executeJavaScript('document.body.innerText'))
       console.log(JSON.stringify(tracker.getDiagnostics(), null, 1))
     }
@@ -418,6 +444,7 @@ function main(): void {
   })
   ipcMain.handle('transitions:day', (_e, day: string, limit?: number) => db.dayTransitions(day, limit))
   ipcMain.handle('apps:list', () => db.listApps())
+  ipcMain.handle('apps:year', (_e, year: number) => db.yearApps(Number(year)))
   ipcMain.handle('apps:detail', (_e, appId: number, day: string) => {
     tracker.flush()
     return db.appDetail(appId, day)
@@ -468,6 +495,18 @@ function main(): void {
   ipcMain.handle('report:monthly', (_e, month: string) => {
     tracker.flush()
     return db.monthly(month)
+  })
+  ipcMain.handle('report:dayTypeMix', (_e, fromDay: string, toDay_: string) => {
+    tracker.flush()
+    return db.dayTypeMix(fromDay, toDay_)
+  })
+  ipcMain.handle('report:records', () => {
+    tracker.flush()
+    return db.records()
+  })
+  ipcMain.handle('report:yearly', (_e, year: number) => {
+    tracker.flush()
+    return db.yearly(Number(year))
   })
   ipcMain.handle('insights:range', (_e, fromDay: string, toDay: string) => {
     tracker.flush()
@@ -532,7 +571,6 @@ function main(): void {
     settings = { ...settings, ...next }
     db.saveSettings(settings)
     if (prev.launchAtStartup !== settings.launchAtStartup) applyLoginItem()
-    if (prev.autoUpdateCheck !== settings.autoUpdateCheck) updater.configure()
     if (prev.dayStartHour !== settings.dayStartHour) {
       // The live session and every recorded day key move to the new boundary.
       tracker.stop()
@@ -555,15 +593,12 @@ function main(): void {
     return runRetention()
   })
 
-  ipcMain.handle('update:status', () => updater.getStatus())
-  ipcMain.handle('update:check', () => updater.check())
-  ipcMain.handle('update:download', () => updater.download())
-  ipcMain.handle('update:install', () => updater.install())
+  ipcMain.handle('store:open', () => shell.openExternal(storeUrl()))
   ipcMain.handle('data:openFolder', () => shell.openPath(app.getPath('userData')))
   ipcMain.handle('data:export', async () => {
     const res = await dialog.showSaveDialog(win!, {
       title: 'Export usage data',
-      defaultPath: `desktime-export-${today()}.json`,
+      defaultPath: `screenwise-export-${today()}.json`,
       filters: [{ name: 'JSON', extensions: ['json'] }]
     })
     if (res.canceled || !res.filePath) return false
@@ -615,7 +650,6 @@ function main(): void {
     /* keep running in the tray */
   })
   app.on('will-quit', () => {
-    updater.dispose()
     tracker.stop()
     tray?.destroy()
     db.close()
@@ -654,7 +688,6 @@ function main(): void {
     // Housekeeping off the startup path: fold old days into totals, then repeat a few times a day.
     setTimeout(retentionTick, 20_000)
     setInterval(retentionTick, RETENTION_EVERY_MS)
-    updater.configure()
 
     if (CAPTURE && !app.isPackaged) {
       void capturePage(CAPTURE)

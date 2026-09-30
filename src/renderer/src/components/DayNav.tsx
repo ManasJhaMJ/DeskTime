@@ -1,5 +1,6 @@
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { addDays, fmtDay, today } from '@/lib/format'
+import { Tooltip } from './ui'
 
 export function DayNav({ day, onChange }: { day: string; onChange: (d: string) => void }): JSX.Element {
   const isToday = day === today()
@@ -8,13 +9,11 @@ export function DayNav({ day, onChange }: { day: string; onChange: (d: string) =
       <button className="btn btn-ghost !px-2 !py-1.5" onClick={() => onChange(addDays(day, -1))} aria-label="Previous day">
         <ChevronLeft size={16} />
       </button>
-      <button
-        className="min-w-[128px] text-center text-[13px] px-2 py-1.5 rounded-md hover:bg-card-2"
-        onClick={() => onChange(today())}
-        title="Jump to today"
-      >
-        {fmtDay(day)}
-      </button>
+      <Tooltip text="Jump to today">
+        <button className="min-w-[128px] text-center text-[13px] px-2 py-1.5 rounded-md hover:bg-card-2" onClick={() => onChange(today())}>
+          {fmtDay(day)}
+        </button>
+      </Tooltip>
       <button
         className="btn btn-ghost !px-2 !py-1.5"
         onClick={() => onChange(addDays(day, 1))}

@@ -12,7 +12,18 @@ const MISSED = 'color-mix(in srgb, var(--danger) 45%, var(--card-2))'
  * GitHub-style graph of one calendar year: week columns from the Monday on or before Jan 1 to Dec 31, Monday at the
  * top. In screen mode cells shade by screen time; in streak mode they show hits, misses, frozen days and today.
  */
-export function YearGraph({ year, screen, streak }: { year: number; screen: Map<string, number>; streak?: StreakStatus | null }): JSX.Element {
+export function YearGraph({
+  year,
+  screen,
+  streak,
+  onSelectDay
+}: {
+  year: number
+  screen: Map<string, number>
+  streak?: StreakStatus | null
+  /** Makes recorded days clickable. */
+  onSelectDay?: (day: string) => void
+}): JSX.Element {
   const [hover, setHover] = useState<{ day: string; x: number; y: number } | null>(null)
   const t = today()
   const first = `${year}-01-01`
@@ -99,8 +110,9 @@ export function YearGraph({ year, screen, streak }: { year: number; screen: Map<
                   {col.map((day) => (
                     <div
                       key={day}
-                      className="rounded-[2.5px]"
+                      className={`rounded-[2.5px] ${onSelectDay && day <= t && day >= first ? 'cursor-pointer' : ''}`}
                       style={{ width: CELL, height: CELL, outlineOffset: -1, ...cellStyle(day) }}
+                      onClick={() => onSelectDay && day <= t && day >= first && onSelectDay(day)}
                       onMouseEnter={(e) => {
                         const root = e.currentTarget.closest('[data-year-graph]') as HTMLElement | null
                         const r = root?.getBoundingClientRect()

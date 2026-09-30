@@ -42,7 +42,7 @@ export function Overview({
   const delta = s && y ? deltaText(s.screenMs, y.screenMs) : null
   const allApps = apps.data ?? []
   const majorApps = allApps.filter((a) => a.activeMs + a.idleMs >= MINOR_APP_MS)
-  const topApps = majorApps.slice(0, 3)
+  const topApps = majorApps.slice(0, 5)
   const moreCount = allApps.length - topApps.length
 
   return (

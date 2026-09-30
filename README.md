@@ -1,25 +1,21 @@
-# DeskTime — Digital DeskTime / Screen Time for Windows
+# ScreenWise — Screen Time for Windows
 
 A privacy-first desktop utility that answers one question: **how am I actually spending my time on my computer?**
 
 It runs quietly in the system tray, tracks which application is in the foreground and whether you are actually
 using the PC, and shows the result in a dark, minimal dashboard. Everything is stored locally in SQLite. There is no
-account, no cloud and no server. The only network request is an optional check for a newer version on GitHub
-Releases, which sends nothing about you and can be turned off in Settings.
+account, no cloud and no server, and the app makes no network requests at all.
 
-## Beta status
+## Getting it
 
-This is a beta. It has been exercised on one Windows 11 PC. Expect rough edges.
+ScreenWise is distributed through the Microsoft Store, which also delivers updates in the background. Settings > About
+has a "Check in Store" button that opens the listing. A pending update installs the next time the app is quit
+completely (Settings > Quit), since Windows will not replace a package while it is running in the tray.
 
-- The installer is not code-signed yet, so Windows SmartScreen shows "Windows protected your PC". Click **More info**,
-  then **Run anyway**.
-- The data format may change between betas. Export from Settings before upgrading if you care about the history.
-- Updating: from beta.2 on, the app checks GitHub Releases at startup and every six hours and offers the download in
-  Settings > About. beta.1 cannot update itself; install beta.2 over it once, data is kept.
-- Known limitations: no browser tab or website tracking, no multi-device sync, Store apps get their proper icon and
-  name after their first launch, and the "Launch at startup" toggle applies to the installed app only.
-- Reporting a problem: open an issue with your Windows version, the newest log (Settings > About > Open logs) and a
-  screenshot of Settings > Diagnostics while the problem is happening. Logs never contain your activity.
+- Known limitations: no browser tab or website tracking, no multi-device sync, and Store apps get their proper icon and
+  name after their first launch.
+- Reporting a problem: include your Windows version, the newest log (Settings > About > Open logs) and a screenshot of
+  Settings > Diagnostics while the problem is happening. Logs never contain your activity.
 
 ## What it tracks
 
@@ -49,8 +45,8 @@ It never records window titles, keystrokes, screenshots, URLs or browser tabs.
 | Streaks | Daily goals (screen time under, active for at least, a category or app under a limit, focus a day) with current and best runs, a 14-day dot row, three freeze days a month, an evening at-risk reminder, and a GitHub-style graph of this year's screen time or of any streak's hits, misses and frozen days |
 | Categories | Editable categories (Work, Communication, Browsing, Entertainment, Games, Tools by default) with a time-by-category bar on the Overview |
 | Digests | Daily notification at a time you choose and a Monday weekly summary, both click through to the dashboard |
-| Reports | Daily, weekly and monthly reports (calendar heatmap, top apps), active time by hour, most common transitions, usage insights (patterns, not scores) |
-| Settings | Idle threshold, day start hour (late nights count toward the previous day), startup behavior, notifications, break reminders, hardware acceleration, how long to keep full detail (older days become daily totals), update checks, data export and deletion |
+| Reports | Weekly, monthly and yearly reports (calendar heatmap, month-by-month against last year, top apps, weekdays vs weekends, personal records), usage insights (patterns, not scores); any day in a graph opens at a glance |
+| Settings | Idle threshold, day start hour (late nights count toward the previous day), background audio, startup behavior, notifications, break reminders, hardware acceleration, how long to keep full detail (older days become daily totals), data export and deletion |
 | Tray | Click for a compact popup (today's total, one-line breakdown, Open / Focus / Pause); double-click opens the dashboard. Multi-size ICO icon, screen time at a glance, open dashboard, start focus, take a break, pause/resume tracking, quit |
 | Startup | Launch at Windows sign-in (registers under the current user's Run key), optionally staying in the tray |
 
@@ -62,7 +58,7 @@ It never records window titles, keystrokes, screenshots, URLs or browser tabs.
 
 ## Logs and crash handling
 
-- `%APPDATA%\DeskTime\logs\desktime.log` (rotated at 1 MB, three files kept). Settings > About > Open logs.
+- `%APPDATA%\ScreenWise\logs\screenwise.log` (rotated at 1 MB, three files kept). Settings > About > Open logs.
 - Contains app health only: start and quit, versions, tracker errors, renderer warnings and crashes, uncaught
   exceptions. Never window titles or usage data.
 - Uncaught errors in the main process are logged and the app keeps running; the tracker tick guards itself, so a
@@ -118,13 +114,13 @@ src/
     db.ts        SQLite schema, queries, aggregations
     win32.ts     koffi bindings and friendly app names
     tray.ts      tray icon and menu
-    updater.ts   update checks and downloads from GitHub Releases (electron-updater)
+    audio.ts     which processes are producing sound (Core Audio sessions via koffi), for the listening track
   preload/     contextBridge API exposed as window.api
   renderer/    React dashboard (pages, components, lib)
   shared/      types shared by all three
 ```
 
-Data lives in `%APPDATA%\DeskTime\desktime.db`. Sessions are rows of `(app, start, end, is_idle, day)`; everything
+Data lives in `%APPDATA%\ScreenWise\screenwise.db`. Sessions are rows of `(app, start, end, is_idle, day)`; everything
 on screen is aggregated from them at query time. Hiding and merging apps are flags on the `apps` table applied at
 query time, so both are reversible and never rewrite recorded sessions. The app never records its own window.
 
@@ -160,11 +156,11 @@ Dev helpers in `scripts/`:
 
 - `make-icons.mjs` builds every app and tray icon from `resources/logo.png` (the source logo) without any image library; the tray uses a white silhouette so it stays visible on a dark taskbar.
 - Offscreen page capture without touching the screen (dev builds only):
-  `DESKTIME_CAPTURE="reports:C:/tmp/reports.png" DESKTIME_CAPTURE_H=1500 npx electron .`
-  Add `DESKTIME_CAPTURE_THEME=light|dark` to force a mode, `DESKTIME_CAPTURE_SCROLL=1700` to capture lower content,
-  `DESKTIME_CAPTURE_TEXT=1` to also print the page text and a diagnostics snapshot, `DESKTIME_CAPTURE_JS='(async () => ...)()'`
+  `SCREENWISE_CAPTURE="reports:C:/tmp/reports.png" SCREENWISE_CAPTURE_H=1500 npx electron .`
+  Add `SCREENWISE_CAPTURE_THEME=light|dark` to force a mode, `SCREENWISE_CAPTURE_SCROLL=1700` to capture lower content,
+  `SCREENWISE_CAPTURE_TEXT=1` to also print the page text and a diagnostics snapshot, `SCREENWISE_CAPTURE_JS='(async () => ...)()'`
   to run a script in the page (its result is printed) before the shot.
-- `DESKTIME_USER_DATA=C:/tmp/profile` (dev builds only) uses a scratch profile with its own database and single-instance
+- `SCREENWISE_USER_DATA=C:/tmp/profile` (dev builds only) uses a scratch profile with its own database and single-instance
   lock, so a dev launch works while the installed app is running and never touches its data.
 
 ## Code signing
@@ -181,19 +177,17 @@ is missing, because a trusted certificate has to be bought and identity-verified
   code-signing certificate from DigiCert, Sectigo or similar (EV skips SmartScreen reputation building).
   Set `CSC_LINK` (path to the PFX) and `CSC_KEY_PASSWORD` in the environment and run `npm run dist`;
   electron-builder signs the exe, the uninstaller and the installer and timestamps them against DigiCert.
-- Auto-update is in place (`electron-updater`, GitHub Releases provider). Until builds are signed, the downloaded
-  installer is verified only by the SHA-512 in `latest.yml` fetched over HTTPS, not by an Authenticode signature, which
-  is why `verifyUpdateCodeSignature` is off in `package.json`. Turn it back on once builds are signed.
+- Store builds need none of this: the Microsoft Store signs the package on submission.
 
 ## Releasing
 
-1. Bump `version` in `package.json` (keep the `-beta.N` suffix while in beta; beta installs only see prerelease
-   versions, stable installs only see stable ones).
-2. `npm run dist` writes `release/DeskTime-Setup-<version>.exe`, its `.blockmap` and `latest.yml`.
-3. Create a GitHub release tagged `v<version>` on `ManasJhaMJ/DeskTime` and upload all three files. Mark betas as
-   pre-release. `latest.yml` is what installed copies read; without it nobody is offered the update.
-4. Installed copies see it within six hours or on Settings > About > Check now, download on request and install on the
-   next restart (or on quit, silently).
+1. Bump `version` in `package.json` and add a section to `RELEASE_NOTES.md`.
+2. `npm run dist:store` writes `release/ScreenWise-<version>.appx` with the Partner Center identity from the `appx`
+   block in `package.json`. Upload it to a new submission in Partner Center with the release notes as the "What's new"
+   text. Launch at startup in this build is a `windows.startupTask` (`resources/appx-extensions.xml`) toggled through
+   the StartupTask API (`src/main/startupTask.ts`); the classic build keeps using the Run key.
+3. Once certified, the Store rolls it out; installed copies pick it up in the background within about a day.
+4. `npm run dist` still produces a classic installer for local testing; it is not distributed.
 
 ## Roadmap
 

@@ -1,10 +1,10 @@
 {
-  "name": "desktime",
-  "productName": "DeskTime",
-  "version": "0.2.0-beta.3",
-  "description": "DeskTime - Digital Wellbeing / Screen Time for Windows. Local-only usage tracking.",
+  "name": "screenwise",
+  "productName": "ScreenWise",
+  "version": "1.0.0",
+  "description": "ScreenWise - Digital Wellbeing / Screen Time for Windows. Local-only usage tracking.",
   "main": "./out/main/index.js",
-  "author": "DeskTime contributors",
+  "author": "ScreenWise contributors",
   "license": "MIT",
   "private": true,
   "scripts": {
@@ -14,8 +14,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.web.json",
     "postinstall": "electron-rebuild -f -w better-sqlite3 && node scripts/make-icons.mjs",
     "icons": "node scripts/make-icons.mjs",
-    "dist": "electron-vite build && electron-builder --win",
-    "dist:signed": "electron-vite build && cross-env-shell \"CSC_LINK=certs/desktime-dev.pfx CSC_KEY_PASSWORD=desktime-dev electron-builder --win\""
+    "dist": "electron-vite build && electron-builder --win nsis",
+    "dist:store": "electron-vite build && electron-builder --win appx",
+    "dist:signed": "electron-vite build && cross-env-shell \"CSC_LINK=certs/screenwise-dev.pfx CSC_KEY_PASSWORD=screenwise-dev electron-builder --win\""
   },
   "dependencies": {
     "@fontsource-variable/caveat": "^5.3.0",
@@ -24,7 +25,6 @@
     "@fontsource/comic-neue": "^5.3.0",
     "better-sqlite3": "^12.11.1",
     "bot-avatars": "^0.1.1",
-    "electron-updater": "^6.8.9",
     "koffi": "^2.16.3"
   },
   "devDependencies": {
@@ -49,13 +49,8 @@
     "vite": "^6.4.3"
   },
   "build": {
-    "appId": "com.desktime.app",
-    "productName": "DeskTime",
-    "publish": {
-      "provider": "github",
-      "owner": "ManasJhaMJ",
-      "repo": "DeskTime"
-    },
+    "appId": "com.screenwise.app",
+    "productName": "ScreenWise",
     "directories": {
       "output": "release",
       "buildResources": "resources"
@@ -71,6 +66,12 @@
     "win": {
       "target": [
         {
+          "target": "appx",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
           "target": "nsis",
           "arch": [
             "x64"
@@ -85,8 +86,22 @@
           "sha256"
         ],
         "rfc3161TimeStampServer": "http://timestamp.digicert.com",
-        "publisherName": "DeskTime"
+        "publisherName": "ScreenWise"
       }
+    },
+    "appx": {
+      "identityName": "MJ10.ScreenWise",
+      "publisher": "CN=1AE74296-F1D3-4741-8A3D-4212C6876CB8",
+      "publisherDisplayName": "MJ10",
+      "applicationId": "ScreenWise",
+      "displayName": "ScreenWise",
+      "backgroundColor": "transparent",
+      "showNameOnTiles": true,
+      "languages": [
+        "en-US"
+      ],
+      "customExtensionsPath": "resources/appx-extensions.xml",
+      "artifactName": "${productName}-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,

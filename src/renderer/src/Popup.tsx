@@ -46,7 +46,7 @@ export default function Popup(): JSX.Element {
   return (
     <div className="h-full flex flex-col p-4 select-none">
       <div className="flex items-center justify-between text-[11.5px] text-secondary shrink-0">
-        <span className="font-semibold tracking-[0.12em]">DESKTIME</span>
+        <span className="font-semibold tracking-[0.12em]">SCREENWISE</span>
         <span className="inline-flex items-center gap-1.5">
           <Dot color={state.color} size={6} live={state.text === 'Tracking'} />
           {state.text}

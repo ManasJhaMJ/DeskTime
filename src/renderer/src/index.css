@@ -4,7 +4,7 @@
 :root {
   color-scheme: light;
   --bg: #f5f6f9;
-  --bg-tint: rgba(217, 80, 63, 0.05);
+  --bg-tint: rgba(var(--accent-rgb), 0.05);
   --card: #ffffff;
   --card-2: #f0f1f5;
   --border: rgba(15, 23, 42, 0.08);
@@ -41,7 +41,7 @@
 html.dark {
   color-scheme: dark;
   --bg: #0b1210;
-  --bg-tint: rgba(255, 122, 107, 0.09);
+  --bg-tint: rgba(var(--accent-rgb), 0.09);
   --card: #111a16;
   --card-2: #18231d;
   --border: rgba(220, 240, 228, 0.08);
@@ -383,7 +383,7 @@ html.material .select-trigger {
   transition: opacity 140ms var(--ease-out), transform 140ms var(--ease-out);
 }
 .has-tip:hover .tip,
-.has-tip:focus-visible .tip {
+.has-tip:focus-within .tip {
   opacity: 1;
   transform: translate(-50%, 0);
 }

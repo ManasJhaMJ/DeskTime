@@ -3,11 +3,15 @@ import { Flame, Trash2 } from 'lucide-react'
 import type { AppInfo, Category, DailyPoint, StreakDay, StreakKind, StreakStatus } from '../../../shared/types'
 import { STREAK_KINDS } from '../../../shared/types'
 import { usePoll } from '@/lib/hooks'
-import { fmtDuration, today } from '@/lib/format'
+import { addDays, fmtDuration, today } from '@/lib/format'
 import { fmtMinutes } from '@/lib/duration'
-import { AppIcon, Card, Dot, Empty, Page, PageHeader, Segmented, Select } from '@/components/ui'
+import { AppIcon, Card, Dot, Page, PageHeader, Segmented, Select, Tooltip } from '@/components/ui'
 import { DurationField } from '@/components/DurationField'
 import { YearGraph } from '@/components/YearGraph'
+import { DayGlance } from '@/components/DayGlance'
+
+/** A day counts toward the usage streak with at least this much screen time. */
+const STREAK_MIN_MS = 5 * 60_000
 
 /** Human name for a streak, e.g. "Screen time under 6h" or "At least 2h of Work". */
 export function streakName(s: { kind: StreakKind; target: number; refName: string | null }): string {
@@ -34,7 +38,9 @@ export function Streaks(): JSX.Element {
   const year = Number(t.slice(0, 4))
   const from = `${year}-01-01`
   const streaks = usePoll<StreakStatus[]>(() => window.api.listStreaks(), [t], 60_000, ['data:changed'])
-  const activity = usePoll<DailyPoint[]>(() => window.api.yearActivity(from, t), [t], 120_000, ['data:changed'])
+  // Back a little over a year so a run that started last year is counted in full.
+  const activity = usePoll<DailyPoint[]>(() => window.api.yearActivity(addDays(t, -400), t), [t], 120_000, ['data:changed'])
+  const [glance, setGlance] = useState<string | null>(null)
   const cats = usePoll<Category[]>(() => window.api.listCategories(), [], 120_000, ['apps:changed'])
   const apps = usePoll<AppInfo[]>(() => window.api.listApps(), [], 120_000, ['apps:changed'])
   const [view, setView] = useState<number | 'screen'>('screen')
@@ -44,6 +50,7 @@ export function Streaks(): JSX.Element {
     if (view !== 'screen' && !list.some((s) => s.id === view)) setView('screen')
   }, [list, view])
   const viewed = view === 'screen' ? null : list.find((s) => s.id === view) ?? null
+  const usage = useMemo(() => usageStreak(activity.data ?? [], t), [activity.data, t])
 
   const remove = async (id: number): Promise<void> => {
     await window.api.removeStreak(id)
@@ -73,23 +80,105 @@ export function Streaks(): JSX.Element {
           ) : undefined
         }
       >
-        <YearGraph year={year} screen={screen} streak={viewed} />
+        <YearGraph year={year} screen={screen} streak={viewed} onSelectDay={setGlance} />
+        <div className="mt-3 text-[11.5px] text-muted">Click a day to see it at a glance.</div>
       </Card>
+      {glance && <DayGlance day={glance} onClose={() => setGlance(null)} />}
 
       <Card title="Your streaks" className="mb-3">
-        {list.length === 0 ? (
-          <Empty title="No streaks yet" hint="Set one below. Streaks count every recorded day, so a habit you already keep shows up right away. Each streak gets three freeze days a month to cover a miss." />
-        ) : (
-          <ul className="flex flex-col divide-y divide-border">
-            {list.map((s) => (
-              <StreakRow key={s.id} s={s} onRemove={() => remove(s.id)} onView={() => setView(s.id)} onToggleFreeze={(d) => toggleFreeze(s, d)} active={view === s.id} />
-            ))}
-          </ul>
+        <ul className="flex flex-col divide-y divide-border">
+          <UsageStreakRow usage={usage} onSelectDay={setGlance} />
+          {list.map((s) => (
+            <StreakRow key={s.id} s={s} onRemove={() => remove(s.id)} onView={() => setView(s.id)} onToggleFreeze={(d) => toggleFreeze(s, d)} active={view === s.id} />
+          ))}
+        </ul>
+        {list.length === 0 && (
+          <div className="mt-3 text-[12.5px] text-muted">
+            Set a goal below. Streaks count every recorded day, so a habit you already keep shows up right away. Each streak gets three freeze days a month to cover a miss.
+          </div>
         )}
       </Card>
 
       <AddStreak cats={cats.data ?? []} apps={(apps.data ?? []).filter((a) => !a.hidden && a.mergedInto === null)} onAdded={() => streaks.refresh()} />
     </Page>
+  )
+}
+
+interface UsageStreak {
+  current: number
+  best: number
+  /** Last 14 days, oldest first: true used, false not, null today so far. */
+  last: { day: string; ok: boolean | null }[]
+  todayMs: number
+}
+
+/** Consecutive days with at least STREAK_MIN_MS of screen time. Today counts once it qualifies; until then it is pending. */
+function usageStreak(points: DailyPoint[], t: string): UsageStreak {
+  const screen = new Map(points.map((d) => [d.day, d.screenMs]))
+  const used = (day: string): boolean => (screen.get(day) ?? 0) >= STREAK_MIN_MS
+  let current = 0
+  for (let d = used(t) ? t : addDays(t, -1); used(d); d = addDays(d, -1)) current++
+  let best = 0
+  let run = 0
+  const days = [...screen.keys()].sort()
+  let prev: string | null = null
+  for (const d of days) {
+    if (!used(d)) continue
+    run = prev !== null && addDays(prev, 1) === d ? run + 1 : 1
+    prev = d
+    best = Math.max(best, run)
+  }
+  best = Math.max(best, current)
+  const last: UsageStreak['last'] = []
+  for (let i = 13; i >= 0; i--) {
+    const d = addDays(t, -i)
+    last.push({ day: d, ok: d === t && !used(d) ? null : used(d) })
+  }
+  return { current, best, last, todayMs: screen.get(t) ?? 0 }
+}
+
+/** The built-in streak: days in a row with any real use of the PC. Cannot be removed or frozen. */
+function UsageStreakRow({ usage, onSelectDay }: { usage: UsageStreak; onSelectDay: (day: string) => void }): JSX.Element {
+  const todayDone = usage.todayMs >= STREAK_MIN_MS
+  return (
+    <li className="flex items-center gap-4 py-3.5">
+      <span className="grid place-items-center w-10 h-10 rounded-full shrink-0" style={{ background: 'rgba(var(--accent-rgb), 0.14)' }}>
+        <Flame size={18} className={usage.current > 0 ? 'text-accent' : 'text-muted'} />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="text-[14px]">
+          Days in a row
+          <span className="ml-2 text-[11px] text-muted">built in</span>
+        </div>
+        <div className={`text-[12.5px] mt-0.5 ${todayDone ? 'text-success' : 'text-secondary'}`}>
+          {todayDone ? 'Counted today' : 'Today not counted yet'}
+          <span className="text-muted"> · any day with at least five minutes of screen time</span>
+        </div>
+      </div>
+      <Tooltip text="Last 14 days · click a day to see it" className="items-center gap-[3px]">
+        {usage.last.map((d) => (
+          <button
+            key={d.day}
+            type="button"
+            className="w-[10px] h-[10px] rounded-full cursor-pointer hover:scale-125 transition-transform"
+            style={{
+              background: d.ok === true ? 'var(--accent)' : d.ok === false ? 'color-mix(in srgb, var(--danger) 45%, var(--card-2))' : 'var(--card-2)',
+              outline: d.ok === null ? '1.5px solid var(--accent)' : undefined,
+              outlineOffset: -1
+            }}
+            aria-label={`${d.day}: ${d.ok === null ? 'today' : d.ok ? 'used' : 'not used'}`}
+            onClick={() => onSelectDay(d.day)}
+          />
+        ))}
+      </Tooltip>
+      <div className="text-right w-[92px]">
+        <div className="hero num text-[22px] leading-none">
+          {usage.current} <span className="text-[12px] text-secondary font-medium">day{usage.current === 1 ? '' : 's'}</span>
+        </div>
+        <div className="text-[11.5px] text-muted num mt-0.5">best {usage.best}</div>
+      </div>
+      <span className="w-[31px]" aria-hidden />
+    </li>
   )
 }
 
@@ -115,17 +204,19 @@ function StreakRow({
         <Flame size={18} className={s.current > 0 ? 'text-accent' : 'text-muted'} />
       </span>
       <div className="min-w-0 flex-1">
-        <button className="text-[14px] text-left hover:text-accent transition-colors" onClick={onView} title="Show on the year graph">
-          {streakName(s)}
-          {active && <span className="ml-2 text-[11px] text-accent">on graph</span>}
-        </button>
+        <Tooltip text="Show on the year graph">
+          <button className="text-[14px] text-left hover:text-accent transition-colors" onClick={onView}>
+            {streakName(s)}
+            {active && <span className="ml-2 text-[11px] text-accent">on graph</span>}
+          </button>
+        </Tooltip>
         <div className={`text-[12.5px] mt-0.5 ${state.tone}`}>
           {state.text}
           {s.days.length > 0 && <span className="text-muted"> · {fmtDuration(s.days[s.days.length - 1].value * 60_000)} so far</span>}
           <span className="text-muted"> · {s.freezesLeft} freeze{s.freezesLeft === 1 ? '' : 's'} left this month</span>
         </div>
       </div>
-      <div className="flex items-center gap-[3px]" title="Last 14 days. Click a missed day to spend a freeze on it.">
+      <Tooltip text="Last 14 days · click a missed day to freeze it" className="items-center gap-[3px]">
         {last.map((d) => {
           const canFreeze = d.ok === false && !d.frozen && s.freezesLeft > 0 && d.day < today()
           return (
@@ -149,7 +240,7 @@ function StreakRow({
             />
           )
         })}
-      </div>
+      </Tooltip>
       <div className="text-right w-[92px]">
         <div className="hero num text-[22px] leading-none">
           {s.current} <span className="text-[12px] text-secondary font-medium">day{s.current === 1 ? '' : 's'}</span>

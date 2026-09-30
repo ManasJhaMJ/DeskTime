@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Pipette } from 'lucide-react'
 import { hexToHsl, hslToHex } from '@/lib/theme'
+import { Tooltip } from './ui'
 
 /**
  * Small in-app color picker: hue, saturation and lightness sliders, a hex field and a pipette that samples any pixel
@@ -111,16 +112,11 @@ export function ColorPicker({ value, onChange, onClose }: { value: string; onCha
           style={hexToHsl(hex) ? undefined : { borderColor: 'var(--danger)' }}
           aria-label="Hex color"
         />
-        <button
-          type="button"
-          className={`btn !p-2 ${picking ? 'btn-accent' : ''}`}
-          onClick={() => setPicking(true)}
-          title="Pick a color from anywhere in this window"
-          aria-label="Pick from the app"
-          aria-pressed={picking}
-        >
-          <Pipette size={15} />
-        </button>
+        <Tooltip text="Pick a color from anywhere in this window">
+          <button type="button" className={`btn !p-2 ${picking ? 'btn-accent' : ''}`} onClick={() => setPicking(true)} aria-label="Pick from the app" aria-pressed={picking}>
+            <Pipette size={15} />
+          </button>
+        </Tooltip>
       </div>
       {slider('Hue', h, hueBg, (v) => apply(v, s, l))}
       {slider('Saturation', s, satBg, (v) => apply(h, v, l))}

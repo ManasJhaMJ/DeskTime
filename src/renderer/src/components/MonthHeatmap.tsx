@@ -13,7 +13,7 @@ function step(ms: number, max: number): string {
   return STEPS[Math.min(STEPS.length - 1, Math.floor(r * STEPS.length))]
 }
 
-export function MonthHeatmap({ days }: { days: DailyPoint[] }): JSX.Element {
+export function MonthHeatmap({ days, onSelectDay }: { days: DailyPoint[]; onSelectDay?: (day: string) => void }): JSX.Element {
   const [hover, setHover] = useState<DailyPoint | null>(null)
   if (!days.length) return <div className="text-secondary text-[13px] py-6 text-center">No data.</div>
   const max = Math.max(...days.map((d) => d.screenMs))
@@ -39,7 +39,8 @@ export function MonthHeatmap({ days }: { days: DailyPoint[] }): JSX.Element {
           ) : (
             <div
               key={c.day}
-              className="relative aspect-[1.6] rounded-md flex items-start justify-end p-1.5 text-[11.5px] num"
+              className={`relative aspect-[1.6] rounded-md flex items-start justify-end p-1.5 text-[11.5px] num ${onSelectDay && c.day <= t ? 'cursor-pointer hover:brightness-110' : ''}`}
+              onClick={() => onSelectDay && c.day <= t && onSelectDay(c.day)}
               style={{
                 background: step(c.screenMs, max),
                 color: c.screenMs / max > 0.6 ? '#fff' : 'var(--secondary)',
@@ -67,6 +68,8 @@ export function MonthHeatmap({ days }: { days: DailyPoint[] }): JSX.Element {
             ? `${fmtDay(hover.day)} · ${fmtDuration(hover.screenMs)} screen · ${fmtDuration(hover.activeMs)} active · ${fmtDuration(hover.idleMs)} idle`
             : hover
               ? `${fmtDay(hover.day)} · nothing recorded`
+              : onSelectDay
+              ? 'Hover a day for details, click for its applications'
               : 'Hover a day for details'}
         </div>
         <div className="flex items-center gap-1.5">

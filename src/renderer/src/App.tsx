@@ -92,7 +92,7 @@ export default function App(): JSX.Element {
       >
         <div className="flex items-center gap-2.5">
           <img src={logo} alt="" className="w-[18px] h-[18px] select-none" draggable={false} />
-          <span className="text-[12px] font-semibold tracking-[0.14em] text-secondary">DESKTIME</span>
+          <span className="text-[12px] font-semibold tracking-[0.14em] text-secondary">SCREENWISE</span>
         </div>
         <div className="no-drag flex items-center gap-2 text-[12.5px] text-secondary">
           <Dot color={state.color} size={7} live={state.live} />
@@ -117,7 +117,7 @@ export default function App(): JSX.Element {
             {page === 'overview' && (
               <Overview key="overview" status={status} onOpenApps={() => setPage('apps')} onOpenTimeline={() => setPage('timeline')} />
             )}
-            {page === 'timeline' && <Timeline key="timeline" onOpenApps={() => setPage('apps')} />}
+            {page === 'timeline' && <Timeline key="timeline" />}
             {page === 'apps' && <Applications key="apps" />}
             {page === 'focus' && <Focus key="focus" />}
             {page === 'limits' && <Limits key="limits" />}
@@ -142,7 +142,7 @@ export default function App(): JSX.Element {
             <RotateCw size={15} className="text-accent shrink-0" />
             <div className="text-[13px]">
               <div className="font-medium">Restart to apply</div>
-              <div className="text-secondary text-[12px]">This change takes effect the next time DeskTime starts.</div>
+              <div className="text-secondary text-[12px]">This change takes effect the next time ScreenWise starts.</div>
             </div>
             <button className="btn btn-accent !py-1.5 !px-3 text-[12.5px] ml-1" onClick={() => window.api.relaunch()}>
               Restart now
